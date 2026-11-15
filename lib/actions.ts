@@ -9,6 +9,7 @@ import { all, get, run, tx, UPLOAD_DIR } from "./db";
 import { createSession, destroySession, requireAdmin, requireUser } from "./auth";
 import { PRIORITIES, STATUSES, TYPES, BOARD_COLORS } from "./constants";
 import type { Board, Ticket } from "./types";
+import { notifyActivity, notifyAssigned } from "./mail";
 
 export type FormState = { error?: string; ok?: string } | undefined;
 
@@ -101,7 +102,7 @@ export async function deleteUser(id: number) {
 /* --------------------------------- tickets ------------------------------- */
 
 export type NewTicket = {
-  boardId: number; title: string; description?: string; type?: string; priority?: string; assigneeId?: number | null; dueDate?: string | null;
+  boardId: number; title: string; description?: string; type?: string; priority?: string; assigneeId?: number | null; dueDate?: string | null; sprintId?: number | null;
 };
 
 export async function createTicket(input: NewTicket): Promise<{ error?: string; key?: string }> {
@@ -112,21 +113,23 @@ export async function createTicket(input: NewTicket): Promise<{ error?: string; 
   if (!board) return { error: "Choose a board." };
   const type = TYPES.some((t) => t.id === input.type) ? input.type! : "task";
   const priority = PRIORITIES.some((t) => t.id === input.priority) ? input.priority! : "medium";
+  const sprint = input.sprintId ? get<{ id: number }>("SELECT id FROM sprints WHERE id = ? AND board_id = ? AND status != 'completed'", input.sprintId, board.id) : undefined;
   const key = tx(() => {
     const { counter } = get<{ counter: number }>("UPDATE boards SET counter = counter + 1 WHERE id = ? RETURNING counter", board.id)!;
     const r = run(
-      "INSERT INTO tickets (board_id,number,title,description,type,priority,assignee_id,reporter_id,due_date) VALUES (?,?,?,?,?,?,?,?,?)",
-      board.id, counter, title.slice(0, 250), (input.description ?? "").trim(), type, priority, input.assigneeId || null, me.id, input.dueDate || null,
+      "INSERT INTO tickets (board_id,number,title,description,type,priority,assignee_id,reporter_id,due_date,sprint_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      board.id, counter, title.slice(0, 250), (input.description ?? "").trim(), type, priority, input.assigneeId || null, me.id, input.dueDate || null, sprint?.id ?? null,
     );
     run("INSERT INTO activity (ticket_id,user_id,action) VALUES (?,?,'created')", Number(r.lastInsertRowid), me.id);
     return { id: Number(r.lastInsertRowid), key: `${board.key}-${counter}` };
   });
+  if (input.assigneeId) notifyAssigned(key.id, me.id);
   revalidatePath("/", "layout");
   return { key: key.key };
 }
 
 const FIELDS = {
-  title: "Summary", description: "Description", type: "Type", status: "Status", priority: "Priority", assignee_id: "Assignee", due_date: "Due date",
+  title: "Summary", description: "Description", type: "Type", status: "Status", priority: "Priority", assignee_id: "Assigned to", due_date: "Due date", sprint_id: "Sprint",
 } as const;
 type Field = keyof typeof FIELDS;
 
@@ -142,10 +145,17 @@ export async function updateTicket(ticketId: number, field: Field, value: string
   if (field === "title") { v = String(v ?? "").trim().slice(0, 250); if (!v) return; }
   if (field === "description") v = String(v ?? "").trim();
   if (field === "assignee_id") v = v ? Number(v) : null;
+  if (field === "sprint_id") {
+    v = v ? Number(v) : null;
+    if (v !== null && !get("SELECT 1 FROM sprints WHERE id = ? AND board_id = ? AND status != 'completed'", v, t.board_id)) return;
+  }
   const old = t[field];
   if ((old ?? null) === v) return;
   const show = (f: Field, x: string | number | null) =>
-    x == null ? null : f === "assignee_id" ? get<{ name: string }>("SELECT name FROM users WHERE id = ?", Number(x))?.name ?? String(x) : String(x);
+    x == null ? (f === "sprint_id" ? "Backlog" : f === "assignee_id" ? "Unassigned" : null)
+      : f === "assignee_id" ? get<{ name: string }>("SELECT name FROM users WHERE id = ?", Number(x))?.name ?? String(x)
+      : f === "sprint_id" ? get<{ name: string }>("SELECT name FROM sprints WHERE id = ?", Number(x))?.name ?? String(x)
+      : String(x);
   tx(() => {
     run(`UPDATE tickets SET ${field} = ?, updated_at = datetime('now') WHERE id = ?`, v, ticketId);
     if (field === "status" && v === "done") run("UPDATE tickets SET progress = 100 WHERE id = ?", ticketId);
@@ -154,6 +164,10 @@ export async function updateTicket(ticketId: number, field: Field, value: string
       ticketId, me.id, FIELDS[field], field === "description" ? null : show(field, old), field === "description" ? null : show(field, v),
     );
   });
+  if (field === "assignee_id") notifyAssigned(ticketId, me.id);
+  else if (field === "sprint_id") { /* sprint planning is bulk housekeeping: no email */ }
+  else if (field === "description") notifyActivity(ticketId, me.id, "updated the description");
+  else notifyActivity(ticketId, me.id, `changed ${FIELDS[field]} from ${show(field, old) ?? "none"} to ${show(field, v) ?? "none"}`);
   revalidatePath("/", "layout");
 }
 
@@ -177,6 +191,7 @@ export async function addComment(ticketId: number, _: FormState, fd: FormData): 
   if (!body) return { error: "Write something first." };
   run("INSERT INTO comments (ticket_id,user_id,body,kind) VALUES (?,?,?,'comment')", ticketId, me.id, body);
   run("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?", ticketId);
+  notifyActivity(ticketId, me.id, "commented", body);
   revalidatePath("/", "layout");
   return { ok: "Comment added." };
 }
@@ -204,6 +219,8 @@ export async function addProgress(ticketId: number, _: FormState, fd: FormData):
       }
     } else run("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?", ticketId);
   });
+  const bits = [pct !== null ? `${pct}% complete` : "", hours ? `${hours}h logged` : ""].filter(Boolean).join(", ");
+  notifyActivity(ticketId, me.id, `posted a progress update${bits ? ` (${bits})` : ""}`, body);
   revalidatePath("/", "layout");
   return { ok: "Progress update posted." };
 }
@@ -230,4 +247,61 @@ export async function deleteAttachment(id: number) {
   removeFiles([a]);
   run("INSERT INTO activity (ticket_id,user_id,action,field,old_value) VALUES (?,?,'removed','Attachment',?)", a.ticket_id, me.id, a.filename);
   revalidatePath("/", "layout");
+}
+
+/* --------------------------------- sprints ------------------------------- */
+
+export type SprintResult = { error?: string };
+
+export async function createSprint(boardId: number, _: FormState, fd: FormData): Promise<FormState> {
+  await requireUser();
+  const board = get<Board>("SELECT * FROM boards WHERE id = ?", boardId);
+  if (!board) return { error: "Board not found." };
+  const name = str(fd.get("name"));
+  const start = str(fd.get("start")) || null;
+  const end = str(fd.get("end")) || null;
+  if (!name) return { error: "Sprint name is required." };
+  if (start && end && end < start) return { error: "End date must be after the start date." };
+  run("INSERT INTO sprints (board_id,name,goal,start_date,end_date) VALUES (?,?,?,?,?)", boardId, name.slice(0, 100), str(fd.get("goal")), start, end);
+  revalidatePath("/", "layout");
+  return { ok: `Sprint "${name}" created.` };
+}
+
+export async function startSprint(id: number): Promise<SprintResult> {
+  await requireUser();
+  const s = get<{ board_id: number; status: string }>("SELECT * FROM sprints WHERE id = ?", id);
+  if (!s || s.status !== "planned") return { error: "Only a planned sprint can be started." };
+  const active = get<{ name: string }>("SELECT name FROM sprints WHERE board_id = ? AND status = 'active'", s.board_id);
+  if (active) return { error: `"${active.name}" is already active. Complete it before starting another.` };
+  run("UPDATE sprints SET status = 'active', start_date = COALESCE(start_date, date('now')) WHERE id = ?", id);
+  revalidatePath("/", "layout");
+  return {};
+}
+
+/** Completing a sprint moves its unfinished tickets to `moveTo` (another planned sprint) or back to the backlog. */
+export async function completeSprint(id: number, moveTo: number | null): Promise<SprintResult> {
+  const me = await requireUser();
+  const s = get<{ board_id: number; status: string }>("SELECT * FROM sprints WHERE id = ?", id);
+  if (!s || s.status !== "active") return { error: "Only an active sprint can be completed." };
+  const dest = moveTo ? get<{ id: number; name: string }>("SELECT id,name FROM sprints WHERE id = ? AND board_id = ? AND status = 'planned'", moveTo, s.board_id) : undefined;
+  tx(() => {
+    const open = all<{ id: number }>("SELECT id FROM tickets WHERE sprint_id = ? AND status != 'done'", id);
+    for (const t of open) {
+      run("UPDATE tickets SET sprint_id = ? WHERE id = ?", dest?.id ?? null, t.id);
+      run("INSERT INTO activity (ticket_id,user_id,action,field,old_value,new_value) VALUES (?,?,'changed','Sprint',(SELECT name FROM sprints WHERE id = ?),?)", t.id, me.id, id, dest?.name ?? "Backlog");
+    }
+    run("UPDATE sprints SET status = 'completed', completed_at = datetime('now') WHERE id = ?", id);
+  });
+  revalidatePath("/", "layout");
+  return {};
+}
+
+export async function deleteSprint(id: number): Promise<SprintResult> {
+  await requireUser();
+  const s = get<{ status: string }>("SELECT status FROM sprints WHERE id = ?", id);
+  if (!s) return {};
+  if (s.status === "active") return { error: "Complete the active sprint before deleting it." };
+  run("DELETE FROM sprints WHERE id = ?", id); // its tickets fall back to the backlog (ON DELETE SET NULL)
+  revalidatePath("/", "layout");
+  return {};
 }

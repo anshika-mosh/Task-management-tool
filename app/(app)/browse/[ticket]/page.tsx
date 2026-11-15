@@ -1,12 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { getAttachments, getComments, getTicketActivity, getTicketByKey, getUsers } from "@/lib/queries";
+import { getAttachments, getComments, getSprints, getTicketActivity, getTicketByKey, getUsers } from "@/lib/queries";
 import { PRIORITIES, STATUSES, TYPES } from "@/lib/constants";
 import { fullDate, timeAgo } from "@/lib/format";
 import { Avatar, ProgressBar, TypeIcon } from "@/components/ui";
 import ActivityLine from "@/components/ActivityLine";
-import { Attachments, CommentForm, DeleteComment, DeleteTicket, DescriptionEditor, FieldSelect, ProgressForm, Tabs, TitleEditor } from "./TicketClient";
+import { AssignToMe, Attachments, CommentForm, DeleteComment, DeleteTicket, DescriptionEditor, FieldSelect, ProgressForm, Tabs, TitleEditor } from "./TicketClient";
 
 export default async function TicketPage({ params }: { params: Promise<{ ticket: string }> }) {
   const me = await requireUser();
@@ -14,6 +14,7 @@ export default async function TicketPage({ params }: { params: Promise<{ ticket:
   const t = getTicketByKey(key);
   if (!t) notFound();
   const users = getUsers();
+  const sprints = getSprints(t.board_id).filter((s) => s.status !== "completed" || s.id === t.sprint_id);
   const comments = getComments(t.id);
   const attachments = getAttachments(t.id);
   const activity = getTicketActivity(t.id);
@@ -50,6 +51,13 @@ export default async function TicketPage({ params }: { params: Promise<{ ticket:
         <div>
           <div className="row" style={{ marginBottom: 4 }}><TypeIcon type={t.type} /><span className="key">{t.key}</span></div>
           <TitleEditor id={t.id} value={t.title} />
+          <div className="assigned-strip">
+            <span className="muted small"><b>Assigned to</b></span>
+            <Avatar name={t.assignee_name} color={t.assignee_color} size={24} />
+            <span>{t.assignee_name ?? <span className="muted">Unassigned</span>}</span>
+            {t.assignee_id !== me.id && <AssignToMe id={t.id} meId={me.id} />}
+            {t.sprint_name && <span className="pill">🏃 {t.sprint_name}</span>}
+          </div>
 
           <div className="section"><h3>Description</h3><DescriptionEditor id={t.id} value={t.description} /></div>
 
@@ -75,7 +83,8 @@ export default async function TicketPage({ params }: { params: Promise<{ ticket:
           <div className="details">
             <div className="details-head"><b>Details</b>{canDelete && <DeleteTicket id={t.id} ticketKey={t.key} />}</div>
             <div className="detail-row"><span className="lbl">Status</span><FieldSelect id={t.id} field="status" value={t.status} options={STATUSES.map((s) => ({ id: s.id, label: s.label }))} /></div>
-            <div className="detail-row"><span className="lbl">Assignee</span><FieldSelect id={t.id} field="assignee_id" value={t.assignee_id ?? ""} options={[{ id: "", label: "Unassigned" }, ...users.map((u) => ({ id: u.id, label: u.name }))]} /></div>
+            <div className="detail-row"><span className="lbl">Assigned to</span><FieldSelect id={t.id} field="assignee_id" value={t.assignee_id ?? ""} options={[{ id: "", label: "Unassigned" }, ...users.map((u) => ({ id: u.id, label: u.name }))]} /></div>
+            <div className="detail-row"><span className="lbl">Sprint</span><FieldSelect id={t.id} field="sprint_id" value={t.sprint_id ?? ""} options={[{ id: "", label: "Backlog (no sprint)" }, ...sprints.map((s) => ({ id: s.id, label: s.name + (s.status === "active" ? " (active)" : s.status === "completed" ? " (completed)" : "") }))]} /></div>
             <div className="detail-row"><span className="lbl">Priority</span><FieldSelect id={t.id} field="priority" value={t.priority} options={PRIORITIES.map((s) => ({ id: s.id, label: s.label }))} /></div>
             <div className="detail-row"><span className="lbl">Type</span><FieldSelect id={t.id} field="type" value={t.type} options={TYPES.map((s) => ({ id: s.id, label: s.label }))} /></div>
             <div className="detail-row"><span className="lbl">Due date</span><FieldSelect id={t.id} field="due_date" type="date" value={t.due_date} /></div>

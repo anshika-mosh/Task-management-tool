@@ -6,6 +6,8 @@ import { logout } from "@/lib/actions";
 import type { Board, User } from "@/lib/types";
 import { Avatar, BoardAvatar } from "./ui";
 import CreateTicket from "./CreateTicket";
+import ThemeToggle from "./ThemeToggle";
+import type { SprintOpt } from "./CreateTicket";
 
 function Dropdown({ label, children, right }: { label: React.ReactNode; children: React.ReactNode; right?: boolean }) {
   const [open, setOpen] = useState(false);
@@ -23,7 +25,7 @@ function Dropdown({ label, children, right }: { label: React.ReactNode; children
   );
 }
 
-export default function Navbar({ user, boards, users }: { user: User; boards: Board[]; users: User[] }) {
+export default function Navbar({ user, boards, users, sprints }: { user: User; boards: Board[]; users: User[]; sprints: SprintOpt[] }) {
   const path = usePathname();
   const router = useRouter();
   const [creating, setCreating] = useState(false);
@@ -46,12 +48,13 @@ export default function Navbar({ user, boards, users }: { user: User; boards: Bo
       <form className="grow" onSubmit={(e) => { e.preventDefault(); const q = new FormData(e.currentTarget).get("q"); router.push(`/issues?q=${encodeURIComponent(String(q ?? ""))}`); }}>
         <input name="q" className="search" placeholder="Search tickets (e.g. WEB-3 or keyword)" aria-label="Search tickets" />
       </form>
+      <ThemeToggle />
       <Dropdown right label={<span className="row"><Avatar name={user.name} color={user.color} size={28} /></span>}>
         <div style={{ padding: "8px 14px" }}><b>{user.name}</b><br /><span className="muted small">{user.email} · {user.role}</span></div>
         <hr />
         <form action={logout}><button type="submit">Log out</button></form>
       </Dropdown>
-      {creating && <CreateTicket boards={boards} users={users} defaultBoardId={current?.id} onClose={() => setCreating(false)} />}
+      {creating && <CreateTicket boards={boards} users={users} sprints={sprints} defaultBoardId={current?.id} onClose={() => setCreating(false)} />}
     </header>
   );
 }

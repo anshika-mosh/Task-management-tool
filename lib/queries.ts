@@ -1,18 +1,20 @@
 import { all, get } from "./db";
-import type { Activity, Attachment, Board, BoardStats, Comment, Ticket, User } from "./types";
+import type { Activity, Attachment, Board, BoardStats, Comment, EmailRow, Sprint, Ticket, User } from "./types";
 
 const TICKET_SELECT = `
 SELECT t.*, b.key AS board_key, b.name AS board_name, b.color AS board_color,
   b.key || '-' || t.number AS key,
   a.name AS assignee_name, a.color AS assignee_color,
   r.name AS reporter_name, r.color AS reporter_color,
+  sp.name AS sprint_name, sp.status AS sprint_status,
   (SELECT COUNT(*) FROM attachments x WHERE x.ticket_id = t.id) AS attach_count,
   (SELECT COUNT(*) FROM comments c WHERE c.ticket_id = t.id AND c.kind = 'comment') AS comment_count,
   (SELECT COALESCE(SUM(hours),0) FROM comments c WHERE c.ticket_id = t.id) AS hours
 FROM tickets t
 JOIN boards b ON b.id = t.board_id
 LEFT JOIN users a ON a.id = t.assignee_id
-LEFT JOIN users r ON r.id = t.reporter_id`;
+LEFT JOIN users r ON r.id = t.reporter_id
+LEFT JOIN sprints sp ON sp.id = t.sprint_id`;
 
 export const getUsers = () =>
   all<User>("SELECT id,name,email,role,color,created_at FROM users ORDER BY name COLLATE NOCASE");
@@ -32,7 +34,7 @@ SELECT b.*, COUNT(t.id) AS total,
 FROM boards b LEFT JOIN tickets t ON t.board_id = b.id
 GROUP BY b.id ORDER BY b.name COLLATE NOCASE`);
 
-export type TicketFilter = { boardId?: number; q?: string; assignee?: string; status?: string; type?: string; priority?: string; mine?: number };
+export type TicketFilter = { boardId?: number; q?: string; assignee?: string; status?: string; type?: string; priority?: string; mine?: number; sprint?: string };
 
 export function getTickets(f: TicketFilter = {}): Ticket[] {
   const where: string[] = [];
@@ -43,6 +45,8 @@ export function getTickets(f: TicketFilter = {}): Ticket[] {
   if (f.priority) { where.push("t.priority = ?"); p.push(f.priority); }
   if (f.assignee === "none") where.push("t.assignee_id IS NULL");
   else if (f.assignee) { where.push("t.assignee_id = ?"); p.push(Number(f.assignee)); }
+  if (f.sprint === "backlog") where.push("t.sprint_id IS NULL");
+  else if (f.sprint) { where.push("t.sprint_id = ?"); p.push(Number(f.sprint)); }
   if (f.mine) { where.push("t.assignee_id = ?"); p.push(f.mine); }
   if (f.q) {
     where.push("(t.title LIKE ? OR t.description LIKE ? OR (b.key || '-' || t.number) LIKE ?)");
@@ -87,3 +91,19 @@ export const getRecentActivity = (limit = 12) =>
 
 export const getBoardActivity = (boardId: number, limit = 8) =>
   all<Activity>(`${ACT_SELECT} WHERE t.board_id = ? ORDER BY a.id DESC LIMIT ?`, boardId, limit);
+
+const SPRINT_SELECT = `SELECT s.*, COUNT(t.id) AS total, COALESCE(SUM(t.status='done'),0) AS done
+  FROM sprints s LEFT JOIN tickets t ON t.sprint_id = s.id`;
+
+export const getSprints = (boardId: number) =>
+  all<Sprint>(`${SPRINT_SELECT} WHERE s.board_id = ? GROUP BY s.id
+    ORDER BY CASE s.status WHEN 'active' THEN 0 WHEN 'planned' THEN 1 ELSE 2 END, s.start_date, s.id DESC`, boardId);
+
+export const getSprint = (id: number) => get<Sprint>(`${SPRINT_SELECT} WHERE s.id = ? GROUP BY s.id`, id);
+
+/** Sprints that can still receive tickets (not completed), across all boards. */
+export const getOpenSprints = () =>
+  all<Sprint>(`${SPRINT_SELECT} WHERE s.status != 'completed' GROUP BY s.id ORDER BY s.start_date, s.id`);
+
+export const getEmails = (limit = 100) =>
+  all<EmailRow>("SELECT * FROM emails ORDER BY id DESC LIMIT ?", limit);

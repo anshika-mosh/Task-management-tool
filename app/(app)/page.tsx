@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
-import { getBoardStats, getRecentActivity, getTickets } from "@/lib/queries";
+import { getBoardStats, getOpenSprints, getRecentActivity, getTickets } from "@/lib/queries";
 import { STATUSES } from "@/lib/constants";
 import { BoardAvatar, PriorityIcon, ProgressBar, StatusLozenge, TypeIcon } from "@/components/ui";
 import ActivityLine from "@/components/ActivityLine";
@@ -10,6 +10,7 @@ export default async function Home() {
   const boards = getBoardStats();
   const mine = getTickets({ mine: user.id }).filter((t) => t.status !== "done");
   const activity = getRecentActivity(10);
+  const activeSprints = new Map(getOpenSprints().filter((s) => s.status === "active").map((s) => [s.board_id, s]));
   const sum = (k: "total" | "todo" | "in_progress" | "in_review" | "done") => boards.reduce((n, b) => n + b[k], 0);
   const total = sum("total");
   const donePct = total ? Math.round((sum("done") / total) * 100) : 0;
@@ -45,6 +46,7 @@ export default async function Home() {
                 <div className="grow"><h2>{b.name}</h2><span className="muted small">{b.key} · {b.total} ticket{b.total === 1 ? "" : "s"}</span></div>
               </div>
               {b.description && <p className="muted small" style={{ margin: "10px 0 0" }}>{b.description}</p>}
+              <div className="small" style={{ marginTop: 8 }}>{activeSprints.get(b.id) ? <span className="pill">🏃 {activeSprints.get(b.id)!.name} · {activeSprints.get(b.id)!.done}/{activeSprints.get(b.id)!.total} done</span> : <span className="muted">No active sprint</span>}</div>
               <div className="stack-bar" title="Ticket status breakdown">
                 {STATUSES.map((s) => b.total > 0 && <div key={s.id} style={{ width: `${(b[s.id] / b.total) * 100}%`, background: s.color }} />)}
               </div>

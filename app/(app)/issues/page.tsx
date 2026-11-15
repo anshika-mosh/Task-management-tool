@@ -24,14 +24,14 @@ export default async function Issues({ searchParams }: { searchParams: Promise<S
         <select name="status" defaultValue={sp.status ?? ""}><option value="">Any status</option>{STATUSES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select>
         <select name="type" defaultValue={sp.type ?? ""}><option value="">Any type</option>{TYPES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select>
         <select name="priority" defaultValue={sp.priority ?? ""}><option value="">Any priority</option>{PRIORITIES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select>
-        <select name="assignee" defaultValue={sp.assignee ?? ""}><option value="">Anyone</option><option value="me">Me</option><option value="none">Unassigned</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select>
+        <select name="assignee" defaultValue={sp.assignee ?? ""}><option value="">Assigned to anyone</option><option value="me">Me</option><option value="none">Unassigned</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select>
         <button className="btn primary">Filter</button>
         <Link className="btn ghost" href="/issues">Reset</Link>
       </form>
       <div className="card" style={{ padding: 0, overflowX: "auto" }}>
         {tickets.length === 0 ? <div className="empty-state">No tickets match.</div> : (
           <table>
-            <thead><tr><th /><th>Key</th><th>Summary</th><th>Priority</th><th>Status</th><th>Progress</th><th>Assignee</th><th>Updated</th></tr></thead>
+            <thead><tr><th /><th>Key</th><th>Summary</th><th>Priority</th><th>Status</th><th>Progress</th><th>Assigned to</th><th>Sprint</th><th>Updated</th></tr></thead>
             <tbody>
               {tickets.map((t) => (
                 <tr key={t.id}>
@@ -42,6 +42,7 @@ export default async function Issues({ searchParams }: { searchParams: Promise<S
                   <td><StatusLozenge status={t.status} /></td>
                   <td style={{ width: 120 }}><ProgressBar value={t.progress} /></td>
                   <td><span className="row"><Avatar name={t.assignee_name} color={t.assignee_color} />{t.assignee_name}</span></td>
+                  <td className="small">{t.sprint_name ?? <span className="muted">Backlog</span>}</td>
                   <td className="muted small">{timeAgo(t.updated_at)}</td>
                 </tr>
               ))}

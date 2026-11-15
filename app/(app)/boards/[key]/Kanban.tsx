@@ -6,7 +6,7 @@ import { PRIORITIES, STATUSES, TYPES } from "@/lib/constants";
 import type { Ticket, User } from "@/lib/types";
 import { Avatar, PriorityIcon, ProgressBar, TypeIcon } from "@/components/ui";
 
-export default function Kanban({ tickets, users, meId }: { tickets: Ticket[]; users: User[]; meId: number }) {
+export default function Kanban({ tickets, users, meId, showSprint }: { tickets: Ticket[]; users: User[]; meId: number; showSprint?: boolean }) {
   const [items, setItems] = useState(tickets);
   const [dragId, setDragId] = useState<number | null>(null);
   const [overCol, setOverCol] = useState<string | null>(null);
@@ -45,7 +45,7 @@ export default function Kanban({ tickets, users, meId }: { tickets: Ticket[]; us
       <div className="filters">
         <input placeholder="Search this board…" value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 220 }} />
         <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
-          <option value="">All assignees</option><option value="me">Assigned to me</option><option value="none">Unassigned</option>
+          <option value="">Anyone assigned</option><option value="me">Assigned to me</option><option value="none">Unassigned</option>
           {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
         </select>
         <select value={type} onChange={(e) => setType(e.target.value)}><option value="">All types</option>{TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}</select>
@@ -75,6 +75,7 @@ export default function Kanban({ tickets, users, meId }: { tickets: Ticket[]; us
                   style={{ borderLeftColor: PRIORITIES.find((p) => p.id === t.priority)?.color }}
                 >
                   <div className="title">{t.title}</div>
+                  {showSprint && <div style={{ marginBottom: 8 }}><span className="pill">{t.sprint_name ?? "Backlog"}</span></div>}
                   <div className="meta">
                     <TypeIcon type={t.type} /><span className="key">{t.key}</span>
                     <span className="chips">{t.attach_count > 0 && <span>📎 {t.attach_count}</span>}{t.comment_count > 0 && <span>💬 {t.comment_count}</span>}</span>

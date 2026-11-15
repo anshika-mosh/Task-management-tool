@@ -8,7 +8,9 @@ import { formatSize } from "@/lib/format";
 import Modal from "./Modal";
 import { uploadFiles } from "./uploader";
 
-export default function CreateTicket({ boards, users, defaultBoardId, onClose }: { boards: Board[]; users: User[]; defaultBoardId?: number; onClose: () => void }) {
+export type SprintOpt = { id: number; board_id: number; name: string; status: string };
+
+export default function CreateTicket({ boards, users, sprints, defaultBoardId, onClose }: { boards: Board[]; users: User[]; sprints: SprintOpt[]; defaultBoardId?: number; onClose: () => void }) {
   const router = useRouter();
   const [boardId, setBoardId] = useState(defaultBoardId ?? boards[0]?.id);
   const [files, setFiles] = useState<File[]>([]);
@@ -17,6 +19,8 @@ export default function CreateTicket({ boards, users, defaultBoardId, onClose }:
   const [pct, setPct] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const board = boards.find((b) => b.id === boardId);
+  const boardSprints = sprints.filter((s) => s.board_id === boardId);
+  const activeSprint = boardSprints.find((s) => s.status === "active");
 
   function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -31,6 +35,7 @@ export default function CreateTicket({ boards, users, defaultBoardId, onClose }:
         priority: String(fd.get("priority")),
         assigneeId: fd.get("assignee") ? Number(fd.get("assignee")) : null,
         dueDate: String(fd.get("due") ?? "") || null,
+        sprintId: fd.get("sprint") ? Number(fd.get("sprint")) : null,
       });
       if (res.error || !res.key) return setError(res.error ?? "Could not create ticket");
       if (files.length) {
@@ -74,12 +79,20 @@ export default function CreateTicket({ boards, users, defaultBoardId, onClose }:
             <select name="priority" defaultValue="medium">{PRIORITIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
           </div>
           <div>
-            <label>Assignee</label>
+            <label>Assigned to</label>
             <select name="assignee" defaultValue=""><option value="">Unassigned</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select>
           </div>
         </div>
-        <label>Due date</label>
-        <input type="date" name="due" />
+        <div className="two">
+          <div>
+            <label>Sprint</label>
+            <select name="sprint" key={boardId} defaultValue={activeSprint?.id ?? ""}>
+              <option value="">Backlog (no sprint)</option>
+              {boardSprints.map((s) => <option key={s.id} value={s.id}>{s.name}{s.status === "active" ? " (active)" : ""}</option>)}
+            </select>
+          </div>
+          <div><label>Due date</label><input type="date" name="due" /></div>
+        </div>
         <label>Attachments (images, videos, files)</label>
         <input ref={fileRef} type="file" multiple hidden onChange={(e) => setFiles([...files, ...Array.from(e.target.files ?? [])])} />
         <button type="button" className="btn" onClick={() => fileRef.current?.click()}>📎 Add files</button>

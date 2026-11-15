@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { requireAdmin } from "@/lib/auth";
 import { getBoardStats, getUsers } from "@/lib/queries";
 import { BoardForms, UserForms, UserRow } from "./AdminClient";
@@ -8,7 +9,7 @@ export default async function Admin() {
   const users = getUsers();
   return (
     <div className="page">
-      <div className="page-head"><div><h1>Administration</h1><div className="muted">Decide board names and keys, and manage who has access.</div></div></div>
+      <div className="page-head"><div className="grow"><h1>Administration</h1><div className="muted">Decide board names and keys, and manage who has access.</div></div><Link className="btn" href="/admin/mail">✉ Mail outbox</Link></div>
       <BoardForms boards={boards} />
       <h2 style={{ margin: "32px 0 12px" }}>Users</h2>
       <UserForms />

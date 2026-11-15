@@ -46,7 +46,7 @@ export function DescriptionEditor({ id, value }: { id: number; value: string }) 
   );
 }
 
-export function FieldSelect({ id, field, value, options, type = "select" }: { id: number; field: "status" | "priority" | "type" | "assignee_id" | "due_date"; value: string | number | null; options?: Opt[]; type?: "select" | "date" }) {
+export function FieldSelect({ id, field, value, options, type = "select" }: { id: number; field: "status" | "priority" | "type" | "assignee_id" | "due_date" | "sprint_id"; value: string | number | null; options?: Opt[]; type?: "select" | "date" }) {
   const [pending, start] = useTransition();
   const [v, setV] = useState(value ?? "");
   useEffect(() => setV(value ?? ""), [value]);
@@ -57,6 +57,11 @@ export function FieldSelect({ id, field, value, options, type = "select" }: { id
       {options!.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
     </select>
   );
+}
+
+export function AssignToMe({ id, meId }: { id: number; meId: number }) {
+  const [pending, start] = useTransition();
+  return <button className="btn sm" disabled={pending} onClick={() => start(() => updateTicket(id, "assignee_id", meId))}>Assign to me</button>;
 }
 
 export function DeleteTicket({ id, ticketKey }: { id: number; ticketKey: string }) {

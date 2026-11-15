@@ -77,7 +77,39 @@ CREATE TABLE IF NOT EXISTS activity (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_activity_ticket ON activity(ticket_id);
+CREATE TABLE IF NOT EXISTS sprints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  goal TEXT NOT NULL DEFAULT '',
+  start_date TEXT,
+  end_date TEXT,
+  status TEXT NOT NULL DEFAULT 'planned', -- planned | active | completed
+  completed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sprints_board ON sprints(board_id);
+CREATE TABLE IF NOT EXISTS emails (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  to_email TEXT NOT NULL,
+  to_name TEXT NOT NULL DEFAULT '',
+  subject TEXT NOT NULL,
+  html TEXT NOT NULL,
+  ticket_key TEXT,
+  status TEXT NOT NULL DEFAULT 'queued', -- queued | sent | failed | logged
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
+
+/** Lightweight migrations for databases created by earlier versions. */
+function migrate(d: DatabaseSync) {
+  const cols = d.prepare("PRAGMA table_info(tickets)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "sprint_id")) {
+    d.exec("ALTER TABLE tickets ADD COLUMN sprint_id INTEGER REFERENCES sprints(id) ON DELETE SET NULL");
+  }
+  d.exec("CREATE INDEX IF NOT EXISTS idx_tickets_sprint ON tickets(sprint_id)");
+}
 
 function init(): DatabaseSync {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -86,6 +118,7 @@ function init(): DatabaseSync {
   d.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   d.exec(SCHEMA);
   d.exec("BEGIN IMMEDIATE");
+  migrate(d);
   try { seed(d); d.exec("COMMIT"); } catch (e) { d.exec("ROLLBACK"); throw e; }
   return d;
 }
@@ -134,6 +167,14 @@ function seed(d: DatabaseSync) {
   d.prepare(
     "INSERT INTO comments (ticket_id,user_id,body,kind,progress,hours) VALUES (1,2,'Wireframes approved, starting the comparison table.','progress',55,6)",
   ).run();
+
+  // One active "Sprint 1" per board holding its first three tickets; the rest stay in the backlog.
+  for (const b of d.prepare("SELECT id, key FROM boards").all() as { id: number; key: string }[]) {
+    const s = d
+      .prepare("INSERT INTO sprints (board_id,name,goal,start_date,end_date,status) VALUES (?,?,?,date('now','-3 days'),date('now','+11 days'),'active')")
+      .run(b.id, `${b.key} Sprint 1`, "Ship the first milestone.");
+    d.prepare("UPDATE tickets SET sprint_id = ? WHERE board_id = ? AND number <= 3").run(Number(s.lastInsertRowid), b.id);
+  }
 }
 
 const g = globalThis as unknown as { __taskflowDb?: DatabaseSync };

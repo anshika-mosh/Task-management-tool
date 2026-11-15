@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth";
 import { get, run, UPLOAD_DIR } from "@/lib/db";
 import { MAX_UPLOAD_MB } from "@/lib/constants";
+import { notifyActivity } from "@/lib/mail";
 
 export const runtime = "nodejs";
 
@@ -35,6 +36,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     saved.push({ id: Number(r.lastInsertRowid), filename: f.name });
   }
   run("UPDATE tickets SET updated_at = datetime('now') WHERE id = ?", ticketId);
+  notifyActivity(ticketId, me.id, `attached ${saved.length === 1 ? saved[0].filename : saved.length + " files"}`);
   revalidatePath("/", "layout");
   return NextResponse.json({ saved });
 }

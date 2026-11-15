@@ -8,7 +8,11 @@ export type Ticket = {
   reporter_id: number | null; reporter_name: string | null; reporter_color: string | null;
   progress: number; due_date: string | null; created_at: string; updated_at: string;
   attach_count: number; comment_count: number; hours: number;
+  sprint_id: number | null; sprint_name: string | null; sprint_status: string | null;
 };
 export type Comment = { id: number; ticket_id: number; user_id: number; user_name: string; user_color: string; body: string; kind: "comment" | "progress"; progress: number | null; hours: number | null; created_at: string };
 export type Attachment = { id: number; ticket_id: number; user_id: number; user_name: string; filename: string; mime: string; size: number; created_at: string };
 export type Activity = { id: number; ticket_id: number; user_id: number; user_name: string; user_color: string; action: string; field: string | null; old_value: string | null; new_value: string | null; created_at: string; ticket_key?: string; ticket_title?: string };
+
+export type Sprint = { id: number; board_id: number; name: string; goal: string; start_date: string | null; end_date: string | null; status: "planned" | "active" | "completed"; completed_at: string | null; created_at: string; total: number; done: number };
+export type EmailRow = { id: number; to_email: string; to_name: string; subject: string; html: string; ticket_key: string | null; status: string; error: string | null; created_at: string };
