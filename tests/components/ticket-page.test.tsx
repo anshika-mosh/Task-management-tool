@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { router } from "../mocks/state";
 import type { Attachment } from "@/lib/types";
+import { answerConfirm, confirmDialog, editorAt, renderWithConfirm, typeInto } from "./utils";
 
 const actions = vi.hoisted(() => ({
   addComment: vi.fn(), addLinkAttachment: vi.fn(), addProgress: vi.fn(), deleteAttachment: vi.fn(), deleteComment: vi.fn(), deleteTicket: vi.fn(), updateTicket: vi.fn(),
@@ -12,7 +13,7 @@ vi.mock("@/lib/actions", () => actions);
 vi.mock("@/components/uploader", () => uploader);
 
 import {
-  AddLink, AssignToMe, Attachments, CommentForm, DeleteComment, DeleteTicket, DescriptionEditor, FieldSelect, ProgressForm, Tabs, TitleEditor,
+  AssignToMe, Attachments, CommentForm, DeleteComment, DeleteTicket, DescriptionEditor, FieldSelect, ProgressForm, Tabs, TitleEditor,
 } from "@/app/(app)/browse/[ticket]/TicketClient";
 
 beforeEach(() => {
@@ -56,24 +57,107 @@ describe("TitleEditor", () => {
   });
 });
 
-describe("DescriptionEditor", () => {
-  it("shows a placeholder when empty and edits in place", async () => {
-    render(<DescriptionEditor id={5} value="" />);
-    fireEvent.click(screen.getByText("Add a description…"));
-    const area = screen.getByRole("textbox");
-    fireEvent.change(area, { target: { value: "Fresh text" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(actions.updateTicket).toHaveBeenCalledWith(5, "description", "Fresh text"));
-    await waitFor(() => expect(screen.queryByRole("textbox")).not.toBeInTheDocument());
+describe("DescriptionEditor (rich text)", () => {
+  it("shows the formatted description; clicking it opens the editor", async () => {
+    render(<DescriptionEditor id={5} html="<h2>Plan</h2><ul><li><p>one</p></li></ul>" />);
+    expect(screen.getByRole("heading", { name: "Plan" })).toBeInTheDocument();
+    expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("one"));
+    expect(await screen.findByRole("toolbar", { name: "Formatting" })).toBeInTheDocument();
+    expect(editorAt().getHTML()).toContain("<h2>Plan</h2>");
   });
 
-  it("Cancel discards the edit", () => {
-    render(<DescriptionEditor id={5} value="Original" />);
+  it("an Edit button also opens it (keyboard friendly)", async () => {
+    render(<DescriptionEditor id={5} html="<p>text</p>" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit description" }));
+    expect(await screen.findByRole("toolbar")).toBeInTheDocument();
+  });
+
+  it("clicking a link inside the description does not open the editor", () => {
+    render(<DescriptionEditor id={5} html='<p><a href="https://x.test">a link</a></p>' />);
+    fireEvent.click(screen.getByRole("link", { name: "a link" }));
+    expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+  });
+
+  it("shows a placeholder when empty; Save stays disabled until something changes, then saves the HTML", async () => {
+    render(<DescriptionEditor id={5} html="" />);
+    fireEvent.click(screen.getByText("Add a description…"));
+    await screen.findByRole("toolbar");
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    typeInto(0, "Fresh text");
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() => expect(actions.updateTicket).toHaveBeenCalledWith(5, "description", "<p>Fresh text</p>"));
+    await waitFor(() => expect(screen.queryByRole("toolbar")).not.toBeInTheDocument());
+  });
+
+  it("regression: opening a description that ends in a table/divider does not count as an edit", async () => {
+    render(<DescriptionEditor id={5} html="<p>intro</p><hr /><table><tbody><tr><th><p>h</p></th></tr><tr><td><p>c</p></td></tr></tbody></table>" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit description" }));
+    await screen.findByRole("toolbar");
+    await new Promise((r) => setTimeout(r, 100)); // the editor adds a blank paragraph after a table
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    typeInto(0, " more");
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("Save becomes disabled again when the edit is undone back to the original", async () => {
+    render(<DescriptionEditor id={5} html="<p>original</p>" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit description" }));
+    await screen.findByRole("toolbar");
+    typeInto(0, " changed");
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    act(() => { editorAt().commands.undo(); });
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("clearing everything saves an empty description", async () => {
+    render(<DescriptionEditor id={5} html="<p>old</p>" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit description" }));
+    await screen.findByRole("toolbar");
+    act(() => { editorAt().commands.clearContent(true); });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(actions.updateTicket).toHaveBeenCalledWith(5, "description", ""));
+  });
+
+  it("Cancel discards the edit", async () => {
+    render(<DescriptionEditor id={5} html="<p>Original</p>" />);
     fireEvent.click(screen.getByText("Original"));
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Changed" } });
+    await screen.findByRole("toolbar");
+    typeInto(0, " changed");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByText("Original")).toBeInTheDocument();
     expect(actions.updateTicket).not.toHaveBeenCalled();
+  });
+
+  it("the paperclip attaches a Drive file: it lands in the text AND is registered as a ticket attachment", async () => {
+    actions.addLinkAttachment.mockResolvedValue({ ok: "Link attached." });
+    render(<DescriptionEditor id={5} html="<p>see</p>" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit description" }));
+    await screen.findByRole("toolbar");
+    fireEvent.click(screen.getByRole("button", { name: "Attach image, video or file" }));
+    const dialog = await screen.findByRole("dialog", { name: "Attach image, video or file" });
+    fireEvent.change(within(dialog).getByLabelText("Link"), { target: { value: "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrSt/view" } });
+    fireEvent.change(within(dialog).getByLabelText(/Name/), { target: { value: "Mockup.png" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Attach" }));
+    await waitFor(() => expect(actions.addLinkAttachment).toHaveBeenCalled());
+    const [id, , fd] = actions.addLinkAttachment.mock.calls[0];
+    expect([id, (fd as FormData).get("url"), (fd as FormData).get("name")]).toEqual([5, "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrSt/view", "Mockup.png"]);
+    expect(editorAt().getHTML()).toContain('data-drive-id="1AbCdEfGhIjKlMnOpQrSt"');
+    await waitFor(() => expect(router.refresh).toHaveBeenCalled());
+  });
+
+  it("shows the server's error if registering the attachment fails", async () => {
+    actions.addLinkAttachment.mockResolvedValue({ error: "Ticket not found." });
+    render(<DescriptionEditor id={5} html="<p>x</p>" />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit description" }));
+    await screen.findByRole("toolbar");
+    fireEvent.click(screen.getByRole("button", { name: "Attach image, video or file" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Link"), { target: { value: "https://cdn.test/clip.mp4" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Attach" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Ticket not found.");
   });
 });
 
@@ -102,32 +186,36 @@ describe("FieldSelect (status, priority, assignee, sprint, due date)", () => {
   });
 });
 
-describe("AssignToMe / DeleteTicket / DeleteComment", () => {
+describe("AssignToMe / DeleteTicket / DeleteComment (in-app confirmation, no browser dialogs)", () => {
   it("Assign to me assigns the signed-in user", () => {
     render(<AssignToMe id={5} meId={3} />);
     fireEvent.click(screen.getByRole("button", { name: "Assign to me" }));
     expect(actions.updateTicket).toHaveBeenCalledWith(5, "assignee_id", 3);
   });
 
-  it("DeleteTicket asks for confirmation first", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    render(<DeleteTicket id={5} ticketKey="WEB-5" />);
+  it("DeleteTicket asks in a modal; cancelling keeps the ticket, confirming deletes it", async () => {
+    const nativeConfirm = vi.spyOn(window, "confirm");
+    renderWithConfirm(<DeleteTicket id={5} ticketKey="WEB-5" />);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("WEB-5"));
+    const dialog = await confirmDialog();
+    expect(dialog).toHaveTextContent("Delete WEB-5?");
+    expect(dialog).toHaveTextContent(/cannot be undone/);
+    await answerConfirm(false);
     expect(actions.deleteTicket).not.toHaveBeenCalled();
-    confirm.mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete ticket" }));
     await waitFor(() => expect(actions.deleteTicket).toHaveBeenCalledWith(5));
+    expect(nativeConfirm).not.toHaveBeenCalled();
   });
 
-  it("DeleteComment asks for confirmation first", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
-    render(<DeleteComment id={9} />);
+  it("DeleteComment asks in a modal first", async () => {
+    renderWithConfirm(<DeleteComment id={9} />);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await answerConfirm(false);
     expect(actions.deleteComment).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(await within(await confirmDialog()).findByRole("button", { name: "Delete" }));
     await waitFor(() => expect(actions.deleteComment).toHaveBeenCalledWith(9));
-    expect(confirm).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -142,43 +230,60 @@ describe("Tabs", () => {
   });
 });
 
-describe("CommentForm", () => {
-  it("posts the comment against the ticket, then clears the box", async () => {
+describe("CommentForm (rich text)", () => {
+  it("posts the formatted comment against the ticket, then clears the editor", async () => {
     actions.addComment.mockResolvedValue({ ok: "Comment added." });
     render(<CommentForm ticketId={5} />);
-    const box = screen.getByPlaceholderText("Add a comment…") as HTMLTextAreaElement;
-    fireEvent.change(box, { target: { value: "Looks good" } });
-    fireEvent.submit(box.closest("form")!);
+    await screen.findByRole("toolbar");
+    typeInto(0, "Looks good");
+    act(() => { editorAt().chain().focus().selectAll().toggleBold().run(); });
+    fireEvent.submit(screen.getByRole("button", { name: "Comment" }).closest("form")!);
     await waitFor(() => expect(actions.addComment).toHaveBeenCalled());
     const [id, , fd] = actions.addComment.mock.calls[0];
     expect(id).toBe(5);
-    expect((fd as FormData).get("body")).toBe("Looks good");
-    await waitFor(() => expect(box.value).toBe(""));
+    expect((fd as FormData).get("body")).toBe("<p><strong>Looks good</strong></p>");
+    await waitFor(() => expect(editorAt().isEmpty).toBe(true));
   });
 
-  it("shows validation errors from the server", async () => {
+  it("has the full formatting toolbar (same as the description)", async () => {
+    render(<CommentForm ticketId={5} />);
+    const bar = await screen.findByRole("toolbar", { name: "Formatting" });
+    for (const label of ["Bold", "Italic", "Underline", "Bullet list", "Numbered list", "Code block", "Quote", "Table", "Attach image, video or file"]) {
+      expect(within(bar).getByRole("button", { name: label })).toBeInTheDocument();
+    }
+  });
+
+  it("an empty comment submits an empty body (the server rejects it) and shows its error", async () => {
     actions.addComment.mockResolvedValue({ error: "Write something first." });
     render(<CommentForm ticketId={5} />);
-    fireEvent.submit(screen.getByPlaceholderText("Add a comment…").closest("form")!);
+    await screen.findByRole("toolbar");
+    fireEvent.submit(screen.getByRole("button", { name: "Comment" }).closest("form")!);
     expect(await screen.findByText("Write something first.")).toBeInTheDocument();
+    expect(((actions.addComment.mock.calls[0][2]) as FormData).get("body")).toBe("");
   });
 });
 
-describe("ProgressForm", () => {
-  it("starts at the ticket's current progress and submits note, percentage and hours", async () => {
+describe("ProgressForm (rich text)", () => {
+  it("starts at the ticket's progress and submits the formatted note, percentage and hours", async () => {
     actions.addProgress.mockResolvedValue({ ok: "Progress update posted." });
     render(<ProgressForm ticketId={5} current={55} />);
+    await screen.findByRole("toolbar");
     expect(screen.getByText("55%", { selector: "b" })).toBeInTheDocument();
     const slider = screen.getByRole("slider");
     expect(slider).toHaveValue("55");
     fireEvent.change(slider, { target: { value: "80" } });
     expect(screen.getByText("80%", { selector: "b" })).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText(/What did you get done/), { target: { value: "Table finished" } });
+    typeInto(0, "Table finished");
+    act(() => { editorAt().chain().focus().selectAll().toggleBulletList().run(); });
     fireEvent.change(screen.getByPlaceholderText("0"), { target: { value: "2.5" } });
     fireEvent.submit(slider.closest("form")!);
     expect(await screen.findByText("Progress update posted.")).toBeInTheDocument();
     const fd = actions.addProgress.mock.calls[0][2] as FormData;
-    expect([actions.addProgress.mock.calls[0][0], fd.get("body"), fd.get("progress"), fd.get("hours")]).toEqual([5, "Table finished", "80", "2.5"]);
+    expect(actions.addProgress.mock.calls[0][0]).toBe(5);
+    expect(String(fd.get("body"))).toMatch(/^<ul><li><p>Table finished<\/p><\/li><\/ul>/); // the server trims any trailing blank paragraph
+    expect([fd.get("progress"), fd.get("hours")]).toEqual(["80", "2.5"]);
+    await waitFor(() => expect(editorAt().isEmpty).toBe(true));
+    expect((screen.getByPlaceholderText("0") as HTMLInputElement).value).toBe("");
   });
 });
 
@@ -189,30 +294,15 @@ const att = (over: Partial<Attachment> = {}): Attachment => ({
   kind: "link", link_type: "drive", url: "https://drive.google.com/file/d/ABCDEFGHIJKL/view?usp=sharing", drive_id: "ABCDEFGHIJKL", ...over,
 });
 const renderAtt = (items: Attachment[], over: Partial<React.ComponentProps<typeof Attachments>> = {}) =>
-  render(<Attachments ticketId={5} items={items} meId={1} isAdmin={false} allowUploads={false} {...over} />);
+  renderWithConfirm(<Attachments ticketId={5} items={items} meId={1} isAdmin={false} allowUploads={false} {...over} />);
 
-describe("AddLink form", () => {
-  it("attaches a link by URL and optional name", async () => {
-    actions.addLinkAttachment.mockResolvedValue({ ok: "Link attached." });
-    render(<AddLink ticketId={5} />);
-    fireEvent.change(screen.getByLabelText("Link URL"), { target: { value: "https://drive.google.com/file/d/ABC/view" } });
-    fireEvent.change(screen.getByLabelText("Link name"), { target: { value: "Demo" } });
-    fireEvent.submit(screen.getByLabelText("Link URL").closest("form")!);
-    await waitFor(() => expect(actions.addLinkAttachment).toHaveBeenCalled());
-    const [id, , fd] = actions.addLinkAttachment.mock.calls[0];
-    expect([id, (fd as FormData).get("url"), (fd as FormData).get("name")]).toEqual([5, "https://drive.google.com/file/d/ABC/view", "Demo"]);
+describe("Attachments gallery", () => {
+  it("no longer has its own link form: attaching happens with the paperclip in the editor", () => {
+    renderAtt([att()]);
+    expect(screen.queryByLabelText("Link URL")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Attach link/ })).not.toBeInTheDocument();
   });
 
-  it("explains how to share a Drive file and shows errors", async () => {
-    actions.addLinkAttachment.mockResolvedValue({ error: "Paste a full link starting with https://" });
-    render(<AddLink ticketId={5} />);
-    expect(screen.getByText(/Anyone with the link/)).toBeInTheDocument();
-    fireEvent.submit(screen.getByLabelText("Link URL").closest("form")!);
-    expect(await screen.findByText("Paste a full link starting with https://")).toBeInTheDocument();
-  });
-});
-
-describe("Attachments", () => {
   it("shows a Drive thumbnail with the file name and source", () => {
     const { container } = renderAtt([att()]);
     expect(container.querySelector("img")).toHaveAttribute("src", "https://drive.google.com/thumbnail?id=ABCDEFGHIJKL&sz=w480");
@@ -233,8 +323,7 @@ describe("Attachments", () => {
   it("opens Drive files in an embedded viewer (plays videos, shows images) that closes on click or Escape", () => {
     const { container } = renderAtt([att()]);
     fireEvent.click(screen.getByRole("button", { name: "Open Mockup.png" }));
-    const frame = container.querySelector("iframe")!;
-    expect(frame).toHaveAttribute("src", "https://drive.google.com/file/d/ABCDEFGHIJKL/preview");
+    expect(container.querySelector("iframe")).toHaveAttribute("src", "https://drive.google.com/file/d/ABCDEFGHIJKL/preview");
     expect(screen.getByRole("link", { name: "Open in Drive ↗" })).toHaveAttribute("href", expect.stringContaining("drive.google.com/file/d/ABCDEFGHIJKL"));
     fireEvent.keyDown(document, { key: "Escape" });
     expect(container.querySelector("iframe")).toBeNull();
@@ -270,32 +359,30 @@ describe("Attachments", () => {
     expect(screen.getByText(/2\.0 KB · Ann/)).toBeInTheDocument();
   });
 
-  it("only the uploader and admins can remove an attachment (after confirming)", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+  it("removing an attachment asks in a modal; only the uploader and admins can", async () => {
+    const nativeConfirm = vi.spyOn(window, "confirm");
     const { unmount } = renderAtt([att({ user_id: 99 })], { meId: 1, isAdmin: false });
     expect(screen.queryByTitle("Remove attachment")).not.toBeInTheDocument();
     unmount();
+
     const { unmount: u2 } = renderAtt([att({ user_id: 99 })], { meId: 1, isAdmin: true });
     fireEvent.click(screen.getByTitle("Remove attachment"));
+    expect(await confirmDialog()).toHaveTextContent("Mockup.png");
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(actions.deleteAttachment).toHaveBeenCalledWith(1));
     u2();
+
     actions.deleteAttachment.mockClear();
     renderAtt([att({ user_id: 1 })], { meId: 1, isAdmin: false });
     fireEvent.click(screen.getByTitle("Remove attachment"));
-    await waitFor(() => expect(actions.deleteAttachment).toHaveBeenCalledWith(1));
-  });
-
-  it("does not remove anything if the confirmation is declined", () => {
-    vi.spyOn(window, "confirm").mockReturnValue(false);
-    renderAtt([att()]);
-    fireEvent.click(screen.getByTitle("Remove attachment"));
-    expect(actions.deleteAttachment).not.toHaveBeenCalled();
+    await answerConfirm(false);
+    expect(actions.deleteAttachment).not.toHaveBeenCalled(); // declined
+    expect(nativeConfirm).not.toHaveBeenCalled();
   });
 
   it("hides the drop zone unless local uploads are enabled", () => {
-    renderAtt([]);
+    renderAtt([att()]);
     expect(screen.queryByText(/drop files here/i)).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Link URL")).toBeInTheDocument();
   });
 
   it("with uploads enabled: uploads chosen files and refreshes the page", async () => {

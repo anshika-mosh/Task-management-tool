@@ -223,15 +223,26 @@ describe("4. things that must NOT send mail", () => {
 });
 
 describe("email content & robustness", () => {
-  it("escapes HTML in titles and comment bodies (no injection into emails)", async () => {
+  it("escapes HTML in titles, strips dangerous markup from rich comments, and escapes plain-text comments", async () => {
     const { rita, t } = await world();
     await loginAs(rita);
-    await addComment(t.id, undefined, fd({ body: '<script>alert("x")</script> & <img src=x onerror=1>' }));
+    await addComment(t.id, undefined, fd({ body: '<p>fine <strong>bold</strong></p><script>alert("x")</script><img src=x onerror=1>' }));
+    await flushAfter();
+    await addComment(t.id, undefined, fd({ body: "a < b & c > d" }));
+    const [rich, plain] = await sent();
+    expect(rich.html).not.toContain("<script");
+    expect(rich.html).not.toContain("onerror");
+    expect(rich.html).toContain("<strong>bold</strong>"); // formatting survives
+    expect(plain.html).toContain("a &lt; b &amp; c &gt; d"); // plain text is escaped
+    expect(rich.html).toContain("Fix &lt;login&gt; &amp; &quot;logout&quot;"); // titles are always escaped
+  });
+
+  it("formatted updates keep their formatting in the email (lists, code, quotes)", async () => {
+    const { rita, t } = await world();
+    await loginAs(rita);
+    await addComment(t.id, undefined, fd({ body: "<h2>Plan</h2><ul><li><p>one</p></li></ul><pre><code>npm test</code></pre><blockquote><p>q</p></blockquote>" }));
     const [mail] = await sent();
-    expect(mail.html).not.toContain("<script>");
-    expect(mail.html).not.toContain("<img src=x");
-    expect(mail.html).toContain("&lt;script&gt;");
-    expect(mail.html).toContain("Fix &lt;login&gt; &amp; &quot;logout&quot;");
+    for (const part of ["<h2>Plan</h2>", "<li><p>one</p></li>", "<pre><code>npm test</code></pre>", "<blockquote><p>q</p></blockquote>"]) expect(mail.html).toContain(part);
   });
 
   it("stores each email in the outbox in order with a timestamp", async () => {

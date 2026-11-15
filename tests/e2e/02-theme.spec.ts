@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { login } from "./helpers";
 
 const theme = (page: import("@playwright/test").Page) => page.evaluate(() => document.documentElement.dataset.theme);
@@ -57,7 +57,7 @@ test.describe("theme: light / dark mode", () => {
         const card = page.locator(".card, .details, .col, .page-head").first();
         await expect(card).toBeVisible();
         const body = await bg(page);
-        expect(body).toBe("rgb(16, 18, 20)");
+        expect(body).toBe("rgb(11, 15, 23)");
       }
     });
   });

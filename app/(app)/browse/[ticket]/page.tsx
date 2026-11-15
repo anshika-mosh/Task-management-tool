@@ -7,6 +7,8 @@ import { PRIORITIES, STATUSES, TYPES } from "@/lib/constants";
 import { fullDate, timeAgo } from "@/lib/format";
 import { Avatar, ProgressBar, TypeIcon } from "@/components/ui";
 import ActivityLine from "@/components/ActivityLine";
+import RichContent from "@/components/RichContent";
+import { toSafeHtml } from "@/lib/rich";
 import { AssignToMe, Attachments, CommentForm, DeleteComment, DeleteTicket, DescriptionEditor, FieldSelect, ProgressForm, Tabs, TitleEditor } from "./TicketClient";
 
 export default async function TicketPage({ params }: { params: Promise<{ ticket: string }> }) {
@@ -31,7 +33,7 @@ export default async function TicketPage({ params }: { params: Promise<{ ticket:
             {c.kind === "progress" ? "posted a progress update" : "commented"} · {timeAgo(c.created_at)}</span></div>
           {c.kind === "progress" ? (
             <div className="progress-note">
-              <p>{c.body}</p>
+              <RichContent html={toSafeHtml(c.body)} />
               {(c.progress != null || c.hours != null) && (
                 <div style={{ marginTop: 6 }}>
                   {c.progress != null && <span className="pill">📈 {c.progress}% complete</span>}
@@ -39,7 +41,7 @@ export default async function TicketPage({ params }: { params: Promise<{ ticket:
                 </div>
               )}
             </div>
-          ) : <p>{c.body}</p>}
+          ) : <RichContent html={toSafeHtml(c.body)} />}
           {(c.user_id === me.id || me.role === "admin") && <DeleteComment id={c.id} />}
         </div>
       </div>
@@ -60,11 +62,13 @@ export default async function TicketPage({ params }: { params: Promise<{ ticket:
             {t.sprint_name && <span className="pill">🏃 {t.sprint_name}</span>}
           </div>
 
-          <div className="section"><h3>Description</h3><DescriptionEditor id={t.id} value={t.description} /></div>
+          <div className="section"><h3>Description</h3><DescriptionEditor id={t.id} html={toSafeHtml(t.description)} /></div>
 
-          <div className="section"><h3>Attachments ({attachments.length})</h3>
-            <Attachments ticketId={t.id} items={attachments} meId={me.id} isAdmin={me.role === "admin"} allowUploads={uploadsEnabled()} />
-          </div>
+          {(attachments.length > 0 || uploadsEnabled()) && (
+            <div className="section"><h3>Attachments ({attachments.length})</h3>
+              <Attachments ticketId={t.id} items={attachments} meId={me.id} isAdmin={me.role === "admin"} allowUploads={uploadsEnabled()} />
+            </div>
+          )}
 
           <div className="section"><h3>Post a progress update</h3><ProgressForm ticketId={t.id} current={t.progress} /></div>
 

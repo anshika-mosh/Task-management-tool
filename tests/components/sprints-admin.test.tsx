@@ -2,6 +2,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { router } from "../mocks/state";
+import { answerConfirm, confirmDialog, renderWithConfirm } from "./utils";
 import type { BoardStats, Sprint, User } from "@/lib/types";
 
 const actions = vi.hoisted(() => ({
@@ -97,7 +98,7 @@ describe("SprintCard", () => {
 
   it("a planned sprint can be started or deleted; shows dates, goal, progress", async () => {
     actions.startSprint.mockResolvedValue({});
-    render(<SprintCard sprint={sprint()} tickets={[tk(1)]} openSprints={open} plannedTargets={[]} />);
+    renderWithConfirm(<SprintCard sprint={sprint()} tickets={[tk(1)]} openSprints={open} plannedTargets={[]} />);
     expect(screen.getByRole("heading", { name: "WEB Sprint 1" })).toBeInTheDocument();
     expect(screen.getByText("planned")).toBeInTheDocument();
     expect(screen.getByText("2026-01-01 → 2026-01-14")).toBeInTheDocument();
@@ -110,14 +111,14 @@ describe("SprintCard", () => {
 
   it("shows the reason when starting is refused (one active sprint per board)", async () => {
     actions.startSprint.mockResolvedValue({ error: '"WEB Sprint 0" is already active. Complete it before starting another.' });
-    render(<SprintCard sprint={sprint()} tickets={[]} openSprints={open} plannedTargets={[]} />);
+    renderWithConfirm(<SprintCard sprint={sprint()} tickets={[]} openSprints={open} plannedTargets={[]} />);
     fireEvent.click(screen.getByRole("button", { name: "Start sprint" }));
     expect(await screen.findByText(/already active/)).toBeInTheDocument();
   });
 
   it("an active sprint is completed through a confirmation that lets you pick where unfinished tickets go", async () => {
     actions.completeSprint.mockResolvedValue({});
-    render(<SprintCard sprint={sprint({ status: "active" })} tickets={[tk(1, { status: "done" }), tk(2), tk(3, { status: "in_review" })]} openSprints={open} plannedTargets={[{ id: 2, name: "WEB Sprint 2" }]} />);
+    renderWithConfirm(<SprintCard sprint={sprint({ status: "active" })} tickets={[tk(1, { status: "done" }), tk(2), tk(3, { status: "in_review" })]} openSprints={open} plannedTargets={[{ id: 2, name: "WEB Sprint 2" }]} />);
     expect(screen.queryByRole("button", { name: "Start sprint" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument(); // cannot delete the active sprint
     fireEvent.click(screen.getByRole("button", { name: "Complete sprint" }));
@@ -130,38 +131,41 @@ describe("SprintCard", () => {
 
   it("completing without choosing a target sends unfinished tickets to the backlog", async () => {
     actions.completeSprint.mockResolvedValue({});
-    render(<SprintCard sprint={sprint({ status: "active" })} tickets={[tk(1)]} openSprints={open} plannedTargets={[{ id: 2, name: "WEB Sprint 2" }]} />);
+    renderWithConfirm(<SprintCard sprint={sprint({ status: "active" })} tickets={[tk(1)]} openSprints={open} plannedTargets={[{ id: 2, name: "WEB Sprint 2" }]} />);
     fireEvent.click(screen.getByRole("button", { name: "Complete sprint" }));
     fireEvent.click(screen.getByRole("button", { name: "Complete" }));
     await waitFor(() => expect(actions.completeSprint).toHaveBeenCalledWith(1, null));
   });
 
   it("when everything is done there is nothing to move", () => {
-    render(<SprintCard sprint={sprint({ status: "active" })} tickets={[tk(1, { status: "done" })]} openSprints={open} plannedTargets={[]} />);
+    renderWithConfirm(<SprintCard sprint={sprint({ status: "active" })} tickets={[tk(1, { status: "done" })]} openSprints={open} plannedTargets={[]} />);
     fireEvent.click(screen.getByRole("button", { name: "Complete sprint" }));
     expect(screen.getByText(/All tickets are done/)).toBeInTheDocument();
   });
 
   it("a completed sprint is read-only: tickets cannot be moved, but the sprint can be deleted", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     actions.deleteSprint.mockResolvedValue({});
-    render(<SprintCard sprint={sprint({ status: "completed" })} tickets={[tk(1, { status: "done", sprint_id: 1 })]} openSprints={open} plannedTargets={[]} />);
+    renderWithConfirm(<SprintCard sprint={sprint({ status: "completed" })} tickets={[tk(1, { status: "done", sprint_id: 1 })]} openSprints={open} plannedTargets={[]} />);
     expect(screen.getByText("Completed", { selector: "span.muted" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Sprint for WEB-1")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete sprint" }));
     await waitFor(() => expect(actions.deleteSprint).toHaveBeenCalledWith(1));
   });
 
-  it("deleting asks for confirmation first", () => {
-    vi.spyOn(window, "confirm").mockReturnValue(false);
-    render(<SprintCard sprint={sprint()} tickets={[]} openSprints={open} plannedTargets={[]} />);
+  it("deleting asks in a modal first (no browser dialog); cancelling keeps the sprint", async () => {
+    const nativeConfirm = vi.spyOn(window, "confirm");
+    renderWithConfirm(<SprintCard sprint={sprint()} tickets={[]} openSprints={open} plannedTargets={[]} />);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(await confirmDialog()).toHaveTextContent(/move back to the backlog/);
+    await answerConfirm(false);
     expect(actions.deleteSprint).not.toHaveBeenCalled();
+    expect(nativeConfirm).not.toHaveBeenCalled();
   });
 
   it("each ticket row links to the ticket and has a sprint selector (including Backlog)", () => {
     actions.updateTicket.mockResolvedValue(undefined);
-    render(<SprintCard sprint={sprint()} tickets={[tk(1, { sprint_id: 1, title: "Fix login" })]} openSprints={open} plannedTargets={[]} />);
+    renderWithConfirm(<SprintCard sprint={sprint()} tickets={[tk(1, { sprint_id: 1, title: "Fix login" })]} openSprints={open} plannedTargets={[]} />);
     expect(screen.getByRole("link", { name: /WEB-1 Fix login/ })).toHaveAttribute("href", "/browse/WEB-1");
     const sel = screen.getByLabelText("Sprint for WEB-1") as HTMLSelectElement;
     expect(within(sel).getAllByRole("option").map((o) => o.textContent)).toEqual(["Backlog", "WEB Sprint 1", "WEB Sprint 2"]);
@@ -173,7 +177,7 @@ describe("SprintCard", () => {
   });
 
   it("the backlog card has no sprint actions and explains when empty", () => {
-    render(<SprintCard backlog tickets={[]} openSprints={open} plannedTargets={[]} />);
+    renderWithConfirm(<SprintCard backlog tickets={[]} openSprints={open} plannedTargets={[]} />);
     expect(screen.getByText("Backlog")).toBeInTheDocument();
     expect(screen.getByText("Backlog is empty.")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
@@ -191,7 +195,7 @@ describe("Admin: create board", () => {
   const keyBox = () => screen.getByPlaceholderText("WEB") as HTMLInputElement;
 
   it("suggests a key from the name: initials for several words, first letters for one", () => {
-    render(<BoardForms boards={[]} />);
+    renderWithConfirm(<BoardForms boards={[]} />);
     fireEvent.change(nameBox(), { target: { value: "Design Systems Team" } });
     expect(keyBox().value).toBe("DST");
     fireEvent.change(nameBox(), { target: { value: "Infrastructure" } });
@@ -201,7 +205,7 @@ describe("Admin: create board", () => {
   });
 
   it("stops suggesting once the admin types their own key (uppercased)", () => {
-    render(<BoardForms boards={[]} />);
+    renderWithConfirm(<BoardForms boards={[]} />);
     fireEvent.change(keyBox(), { target: { value: "ops" } });
     expect(keyBox().value).toBe("OPS");
     fireEvent.change(nameBox(), { target: { value: "Something Else" } });
@@ -210,7 +214,7 @@ describe("Admin: create board", () => {
 
   it("submits the form and shows success / error messages", async () => {
     actions.createBoard.mockResolvedValueOnce({ error: "The key WEB is already used by another board." }).mockResolvedValueOnce({ ok: "Board WEB created." });
-    render(<BoardForms boards={[]} />);
+    renderWithConfirm(<BoardForms boards={[]} />);
     fireEvent.change(nameBox(), { target: { value: "Web Team" } });
     fireEvent.submit(nameBox().closest("form")!);
     expect(await screen.findByText(/already used/)).toBeInTheDocument();
@@ -225,7 +229,7 @@ describe("Admin: create board", () => {
 describe("forms keep what you typed when the server rejects them", () => {
   it("create board: a duplicate-key error does not clear the name or description", async () => {
     actions.createBoard.mockResolvedValue({ error: "The key WEB is already used by another board." });
-    render(<BoardForms boards={[]} />);
+    renderWithConfirm(<BoardForms boards={[]} />);
     fireEvent.change(screen.getByPlaceholderText("Website Team"), { target: { value: "Web Team" } });
     fireEvent.change(screen.getByPlaceholderText("What does this team work on?"), { target: { value: "Marketing" } });
     fireEvent.submit(screen.getByPlaceholderText("Website Team").closest("form")!);
@@ -237,7 +241,7 @@ describe("forms keep what you typed when the server rejects them", () => {
 
 describe("Admin: board list", () => {
   it("lists boards with their key and ticket count, linking to the board", () => {
-    render(<BoardForms boards={[board(), board({ id: 2, key: "MOB", name: "Mobile", total: 1, description: "" })]} />);
+    renderWithConfirm(<BoardForms boards={[board(), board({ id: 2, key: "MOB", name: "Mobile", total: 1, description: "" })]} />);
     expect(screen.getByRole("link", { name: "Website" })).toHaveAttribute("href", "/boards/WEB");
     expect(screen.getByText(/4 tickets · Marketing/)).toBeInTheDocument();
     expect(screen.getByText(/^1 ticket$/)).toBeInTheDocument();
@@ -245,7 +249,7 @@ describe("Admin: board list", () => {
 
   it("edits a board (key is not editable) and can cancel", async () => {
     actions.updateBoard.mockResolvedValue({ ok: "Saved." });
-    render(<BoardForms boards={[board()]} />);
+    renderWithConfirm(<BoardForms boards={[board()]} />);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(screen.getByText(/can't be changed/)).toBeInTheDocument();
     const name = screen.getByDisplayValue("Website");
@@ -258,19 +262,24 @@ describe("Admin: board list", () => {
   });
 
   it("deleting a board warns about its tickets and needs confirmation", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
-    render(<BoardForms boards={[board()]} />);
+    const nativeConfirm = vi.spyOn(window, "confirm");
+    renderWithConfirm(<BoardForms boards={[board()]} />);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/WEB.*4 ticket/));
+    const dialog = await confirmDialog();
+    expect(dialog).toHaveTextContent("Delete board WEB?");
+    expect(dialog).toHaveTextContent(/4 tickets/);
+    await answerConfirm(false);
     expect(actions.deleteBoard).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete board" }));
     await waitFor(() => expect(actions.deleteBoard).toHaveBeenCalledWith(1));
+    expect(nativeConfirm).not.toHaveBeenCalled();
   });
 });
 
 describe("Admin: users", () => {
   const u = (over: Partial<User> = {}): User => ({ id: 2, name: "Bob Jones", email: "bob@x.dev", role: "member", color: "#222222", created_at: "", ...over });
-  const inTable = (el: React.ReactElement) => render(<table><tbody>{el}</tbody></table>);
+  const inTable = (el: React.ReactElement) => renderWithConfirm(<table><tbody>{el}</tbody></table>);
 
   it("the add-user form submits name, email, password and role", async () => {
     actions.createUser.mockResolvedValue({ ok: "Bob added." });
@@ -304,12 +313,15 @@ describe("Admin: users", () => {
   });
 
   it("removing a user needs confirmation and explains the consequences", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const nativeConfirm = vi.spyOn(window, "confirm");
     inTable(<UserRow user={u()} isMe={false} />);
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Bob Jones"));
+    expect(await confirmDialog()).toHaveTextContent("Remove Bob Jones?");
+    await answerConfirm(false);
     expect(actions.deleteUser).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove user" }));
     await waitFor(() => expect(actions.deleteUser).toHaveBeenCalledWith(2));
+    expect(nativeConfirm).not.toHaveBeenCalled();
   });
 });

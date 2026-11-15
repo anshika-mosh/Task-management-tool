@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { completeSprint, createSprint, deleteSprint, startSprint, updateTicket } from "@/lib/actions";
 import type { Sprint } from "@/lib/types";
 import { Avatar, PriorityIcon, ProgressBar, StatusLozenge, TypeIcon } from "@/components/ui";
+import { useConfirm } from "@/components/ConfirmProvider";
 
 type T = { id: number; key: string; title: string; type: string; status: string; priority: string; assignee_name: string | null; assignee_color: string | null; sprint_id: number | null };
 type Opt = { id: number; name: string };
@@ -54,6 +55,7 @@ export function SprintCard({ sprint, tickets, openSprints, plannedTargets, backl
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   const [moveTo, setMoveTo] = useState("");
+  const confirm = useConfirm();
   const [completing, setCompleting] = useState(false);
   const readOnly = sprint?.status === "completed";
   const unfinished = tickets.filter((t) => t.status !== "done").length;
@@ -71,7 +73,7 @@ export function SprintCard({ sprint, tickets, openSprints, plannedTargets, backl
         {sprint?.status === "planned" && <button className="btn primary sm" disabled={pending} onClick={() => run(() => startSprint(sprint.id))}>Start sprint</button>}
         {sprint?.status === "active" && <button className="btn sm" onClick={() => setCompleting(!completing)}>Complete sprint</button>}
         {sprint && sprint.status !== "active" && (
-          <button className="btn danger sm" disabled={pending} onClick={() => confirm(`Delete ${sprint.name}? Its tickets move to the backlog.`) && run(() => deleteSprint(sprint.id))}>Delete</button>
+          <button className="btn danger sm" disabled={pending} onClick={async () => { if (await confirm({ title: `Delete ${sprint.name}?`, message: "The sprint is removed and its tickets move back to the backlog.", confirmLabel: "Delete sprint", danger: true })) run(() => deleteSprint(sprint.id)); }}>Delete</button>
         )}
       </div>
       {sprint?.goal && <p className="muted small" style={{ margin: "0 0 8px" }}>🎯 {sprint.goal}</p>}

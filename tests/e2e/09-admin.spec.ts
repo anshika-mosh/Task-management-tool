@@ -1,5 +1,6 @@
-import { expect, test, type Page } from "@playwright/test";
-import { createTicket, login, logout } from "./helpers";
+import type { Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
+import { confirmModal, createTicket, login, logout } from "./helpers";
 
 const boardRow = (page: Page, name: string) => page.locator(".card.row", { hasText: name });
 
@@ -62,14 +63,12 @@ test.describe.serial("administration: boards", () => {
   test("deleting a board removes its tickets (after confirming)", async ({ page }) => {
     await login(page, "admin");
     await page.goto("/admin");
-    page.once("dialog", (d) => {
-      expect(d.message()).toContain("EDT");
-      return d.dismiss();
-    });
     await boardRow(page, "E2E Design Guild").getByRole("button", { name: "Delete" }).click();
+    await expect(page.getByRole("alertdialog")).toContainText("EDT");
+    await confirmModal(page, false);
     await expect(boardRow(page, "E2E Design Guild")).toHaveCount(1);
-    page.once("dialog", (d) => d.accept());
     await boardRow(page, "E2E Design Guild").getByRole("button", { name: "Delete" }).click();
+    await confirmModal(page, true);
     await expect(boardRow(page, "E2E Design Guild")).toHaveCount(0);
     expect((await page.goto("/boards/EDT"))?.status()).toBe(404);
     expect((await page.goto("/browse/EDT-1"))?.status()).toBe(404);
@@ -130,8 +129,9 @@ test.describe.serial("administration: users", () => {
     await login(page, "admin");
     const key = await createTicket(page, { board: "Website Team (WEB)", title: "E2E zed's ticket", assignee: person.name });
     await page.goto("/admin");
-    page.once("dialog", (d) => d.accept());
     await page.locator("table tbody tr", { hasText: person.email }).getByRole("button", { name: "Remove" }).click();
+    await expect(page.getByRole("alertdialog")).toContainText(`Remove ${person.name}?`);
+    await confirmModal(page, true);
     await expect(page.locator("table tbody tr", { hasText: person.email })).toHaveCount(0);
     await page.goto(`/browse/${key}`);
     await expect(page.locator(".assigned-strip")).toContainText("Unassigned");

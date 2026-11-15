@@ -42,3 +42,4 @@ Rules of thumb for the use cases: every use case needs a happy path, validation/
 - Email rules: assigned→assignee; others' updates→assignee; assignee's updates→reporter; never the actor; sprint moves are silent.
 - Images/videos are **Google Drive links** (`lib/links.ts`); local uploads are off unless `ALLOW_FILE_UPLOADS=true`.
 - No multi-document transactions (must run on standalone Mongo); ids are small numeric `_id`s from the `counters` collection.
+- **Documentation**: `docs/TaskFlow-Documentation.docx` is generated (`npm run docs`; sources in `docs/diagrams/diagrams.mjs` and `docs/build/`). When features, flows, routes/actions or config change, update the matching chapter/diagram and regenerate it.

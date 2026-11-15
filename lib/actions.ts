@@ -10,6 +10,7 @@ import { createSession, destroySession, requireAdmin, requireUser } from "./auth
 import { PRIORITIES, STATUSES, TYPES, BOARD_COLORS } from "./constants";
 import { parseLink } from "./links";
 import { notifyActivity, notifyAssigned } from "./mail";
+import { isEmptyRich, normalizeRich } from "./rich";
 import type { Board } from "./types";
 
 export type FormState = { error?: string; ok?: string } | undefined;
@@ -169,7 +170,7 @@ export async function createTicket(input: NewTicket): Promise<{ error?: string; 
   const id = await nextId("tickets");
   const ts = now();
   await (await col("tickets")).insertOne({
-    _id: id as never, board_id: board._id, number, title: title.slice(0, 250), description: (input.description ?? "").trim(), type, status: "todo", priority,
+    _id: id as never, board_id: board._id, number, title: title.slice(0, 250), description: normalizeRich(input.description), type, status: "todo", priority,
     assignee_id: input.assigneeId || null, reporter_id: me.id, progress: 0, due_date: input.dueDate || null, sprint_id: sprint?._id ?? null, created_at: ts, updated_at: ts,
   });
   await log(id, me.id, "created");
@@ -202,7 +203,7 @@ export async function updateTicket(ticketId: number, field: Field, value: string
   if (field === "priority" && !PRIORITIES.some((s) => s.id === v)) return;
   if (field === "type" && !TYPES.some((s) => s.id === v)) return;
   if (field === "title") { v = String(v ?? "").trim().slice(0, 250); if (!v) return; }
-  if (field === "description") v = String(v ?? "").trim();
+  if (field === "description") v = normalizeRich(String(v ?? ""));
   if (field === "assignee_id") v = v ? Number(v) : null;
   if (field === "sprint_id") {
     v = v ? Number(v) : null;
@@ -244,8 +245,8 @@ async function touch(ticketId: number) {
 
 export async function addComment(ticketId: number, _: FormState, fd: FormData): Promise<FormState> {
   const me = await requireUser();
-  const body = str(fd.get("body"));
-  if (!body) return { error: "Write something first." };
+  const body = normalizeRich(str(fd.get("body")));
+  if (isEmptyRich(body)) return { error: "Write something first." };
   if (!(await (await col("tickets")).findOne({ _id: ticketId as never }, { projection: { _id: 1 } }))) return { error: "Ticket not found." };
   await (await col("comments")).insertOne({ _id: (await nextId("comments")) as never, ticket_id: ticketId, user_id: me.id, body, kind: "comment", progress: null, hours: null, created_at: now() });
   await touch(ticketId);
@@ -257,10 +258,10 @@ export async function addComment(ticketId: number, _: FormState, fd: FormData): 
 /** A progress update: note + optional % complete + optional hours logged. */
 export async function addProgress(ticketId: number, _: FormState, fd: FormData): Promise<FormState> {
   const me = await requireUser();
-  const body = str(fd.get("body"));
+  const body = normalizeRich(str(fd.get("body")));
   const pctRaw = str(fd.get("progress"));
   const hoursRaw = str(fd.get("hours"));
-  if (!body) return { error: "Describe what you did." };
+  if (isEmptyRich(body)) return { error: "Describe what you did." };
   const pct = pctRaw === "" ? null : Math.max(0, Math.min(100, Math.round(Number(pctRaw))));
   const hours = hoursRaw === "" ? null : Math.max(0, Number(hoursRaw));
   if ((pct !== null && Number.isNaN(pct)) || (hours !== null && Number.isNaN(hours))) return { error: "Progress and hours must be numbers." };

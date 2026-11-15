@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { Icon } from "./icons";
 
 type Theme = "light" | "dark";
 
@@ -20,7 +21,7 @@ export default function ThemeToggle({ floating }: { floating?: boolean }) {
   const label = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
   return (
     <button className={"theme-toggle" + (floating ? " theme-float" : "")} onClick={toggle} title={label} aria-label={label} suppressHydrationWarning>
-      {theme === "dark" ? "☀️" : "🌙"}
+      <Icon name={theme === "dark" ? "sun" : "moon"} size={18} />
     </button>
   );
 }

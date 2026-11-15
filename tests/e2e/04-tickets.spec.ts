@@ -1,5 +1,5 @@
-import { expect, test } from "@playwright/test";
-import { createTicket, detail, detailRow, login, logout } from "./helpers";
+import { expect, test } from "./fixtures";
+import { confirmModal, createTicket, detail, detailRow, editDescription, editorBox, login, logout } from "./helpers";
 
 test.describe.serial("ticket lifecycle (Jira-style)", () => {
   let key = "";
@@ -7,7 +7,7 @@ test.describe.serial("ticket lifecycle (Jira-style)", () => {
   test("create a ticket with every field: it gets a unique BOARD-number key", async ({ page }) => {
     await login(page, "admin");
     key = await createTicket(page, {
-      board: "Website Team (WEB)", title: "E2E full ticket", description: "Steps to reproduce\n1. open page", type: "bug", priority: "highest", assignee: "Priya Sharma",
+      board: "Website Team (WEB)", title: "E2E full ticket", description: "Steps to reproduce", type: "bug", priority: "highest", assignee: "Priya Sharma",
     });
     expect(key).toMatch(/^WEB-\d+$/);
     await expect(page.getByLabel("Ticket summary")).toHaveValue("E2E full ticket");
@@ -37,8 +37,8 @@ test.describe.serial("ticket lifecycle (Jira-style)", () => {
     const title = page.getByLabel("Ticket summary");
     await title.fill("E2E renamed ticket");
     await title.press("Enter");
-    await page.locator(".desc").click();
-    await page.locator("textarea").first().fill("A brand new description");
+    await editDescription(page);
+    await editorBox(page, "Description").fill("A brand new description");
     await page.getByRole("button", { name: "Save" }).click();
     await page.reload();
     await expect(page.getByLabel("Ticket summary")).toHaveValue("E2E renamed ticket");
@@ -87,18 +87,18 @@ test.describe.serial("ticket lifecycle (Jira-style)", () => {
   test("comments appear in the activity feed", async ({ page }) => {
     await login(page, "admin");
     await page.goto(`/browse/${key}`);
-    await page.getByPlaceholder("Add a comment…").fill("First comment from e2e");
+    await editorBox(page, "Comment").fill("First comment from e2e");
     await page.getByRole("button", { name: "Comment", exact: true }).click();
     await expect(page.locator(".feed-item", { hasText: "First comment from e2e" })).toBeVisible();
     await expect(page.getByRole("tab", { name: /Updates & comments \(1\)/ })).toBeVisible();
-    await expect(page.getByPlaceholder("Add a comment…")).toHaveValue(""); // box is cleared
+    await expect(editorBox(page, "Comment")).toHaveText(""); // editor is cleared
   });
 
   test("a progress update records %, hours and moves a To Do ticket to In Progress", async ({ page }) => {
     await login(page, "admin");
     const fresh = await createTicket(page, { board: "Website Team (WEB)", title: "E2E progress ticket" });
     await expect(detail(page, "Status")).toHaveValue("todo");
-    await page.getByPlaceholder(/What did you get done/).fill("Wrote the first half");
+    await editorBox(page, "Progress update").fill("Wrote the first half");
     await page.locator('input[type="range"]').fill("60");
     await page.getByPlaceholder("0", { exact: true }).fill("2.5");
     await page.getByRole("button", { name: "Post update" }).click();
@@ -166,11 +166,12 @@ test.describe.serial("ticket lifecycle (Jira-style)", () => {
   test("deleting a ticket asks for confirmation, then removes it", async ({ page }) => {
     await login(page, "admin");
     await page.goto(`/browse/${key}`);
-    page.once("dialog", (d) => d.dismiss());
     await page.locator(".details-head").getByRole("button", { name: "Delete" }).click();
+    await expect(page.getByRole("alertdialog")).toContainText(`Delete ${key}?`);
+    await confirmModal(page, false);
     await expect(page).toHaveURL(new RegExp(`/browse/${key}$`)); // cancelled: still here
-    page.once("dialog", (d) => d.accept());
     await page.locator(".details-head").getByRole("button", { name: "Delete" }).click();
+    await confirmModal(page, true);
     await expect(page).toHaveURL(/\/boards\/WEB/);
     const res = await page.goto(`/browse/${key}`);
     expect(res?.status()).toBe(404);
