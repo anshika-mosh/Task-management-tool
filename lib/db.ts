@@ -1,145 +1,149 @@
-import { DatabaseSync } from "node:sqlite";
-import fs from "node:fs";
+import { MongoClient, type Collection, type Db, type Document } from "mongodb";
 import path from "node:path";
 import bcrypt from "bcryptjs";
 
+/**
+ * MongoDB data layer.
+ *  - Every document keeps a numeric `_id` (allocated from the `counters` collection) so ids stay small
+ *    plain numbers in URLs, props and the UI. `toRow()` exposes it as `id`.
+ *  - Timestamps are ISO-8601 strings, dates (due/sprint) are "YYYY-MM-DD" strings.
+ *  - No multi-document transactions are used, so this works on a standalone mongod, a replica set and Atlas.
+ */
+
+// Local-disk uploads (optional; images/videos are normally Google Drive links).
 export const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), ".data");
 export const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
+export const uploadsEnabled = () => process.env.ALLOW_FILE_UPLOADS === "true";
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  email TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'member',
-  color TEXT NOT NULL DEFAULT '#2684ff',
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS boards (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  key TEXT NOT NULL UNIQUE,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  color TEXT NOT NULL DEFAULT '#2684ff',
-  counter INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS tickets (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
-  number INTEGER NOT NULL,
-  title TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  type TEXT NOT NULL DEFAULT 'task',
-  status TEXT NOT NULL DEFAULT 'todo',
-  priority TEXT NOT NULL DEFAULT 'medium',
-  assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  reporter_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  progress INTEGER NOT NULL DEFAULT 0,
-  due_date TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(board_id, number)
-);
-CREATE INDEX IF NOT EXISTS idx_tickets_board ON tickets(board_id);
-CREATE INDEX IF NOT EXISTS idx_tickets_assignee ON tickets(assignee_id);
-CREATE TABLE IF NOT EXISTS comments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  body TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'comment',
-  progress INTEGER,
-  hours REAL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_comments_ticket ON comments(ticket_id);
-CREATE TABLE IF NOT EXISTS attachments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  filename TEXT NOT NULL,
-  stored_name TEXT NOT NULL,
-  mime TEXT NOT NULL,
-  size INTEGER NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_attachments_ticket ON attachments(ticket_id);
-CREATE TABLE IF NOT EXISTS activity (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  action TEXT NOT NULL,
-  field TEXT,
-  old_value TEXT,
-  new_value TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_activity_ticket ON activity(ticket_id);
-CREATE TABLE IF NOT EXISTS sprints (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  goal TEXT NOT NULL DEFAULT '',
-  start_date TEXT,
-  end_date TEXT,
-  status TEXT NOT NULL DEFAULT 'planned', -- planned | active | completed
-  completed_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_sprints_board ON sprints(board_id);
-CREATE TABLE IF NOT EXISTS emails (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  to_email TEXT NOT NULL,
-  to_name TEXT NOT NULL DEFAULT '',
-  subject TEXT NOT NULL,
-  html TEXT NOT NULL,
-  ticket_key TEXT,
-  status TEXT NOT NULL DEFAULT 'queued', -- queued | sent | failed | logged
-  error TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-`;
+export type CollName = "users" | "boards" | "tickets" | "comments" | "attachments" | "activity" | "sprints" | "emails" | "counters" | "meta";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type Doc = Record<string, any>;
+/** What every collection stores: a numeric _id plus free-form fields. */
+export type Stored = { _id: number } & Doc;
 
-/** Lightweight migrations for databases created by earlier versions. */
-function migrate(d: DatabaseSync) {
-  const cols = d.prepare("PRAGMA table_info(tickets)").all() as { name: string }[];
-  if (!cols.some((c) => c.name === "sprint_id")) {
-    d.exec("ALTER TABLE tickets ADD COLUMN sprint_id INTEGER REFERENCES sprints(id) ON DELETE SET NULL");
+const g = globalThis as unknown as { __tfClient?: Promise<MongoClient>; __tfReady?: Promise<Db> };
+
+function client(): Promise<MongoClient> {
+  return (g.__tfClient ??= (async () => {
+    const uri = process.env.MONGODB_URI;
+    if (!uri) throw new Error("MONGODB_URI is not set. Copy .env.example to .env.local, fill it in and restart.");
+    const c = new MongoClient(uri, { serverSelectionTimeoutMS: 10000 });
+    await c.connect();
+    return c;
+  })().catch((e) => {
+    g.__tfClient = undefined; // allow a retry after fixing the config
+    throw e;
+  }));
+}
+
+/** Connects once, creates indexes and seeds first-run data. */
+export function getDb(): Promise<Db> {
+  return (g.__tfReady ??= (async () => {
+    const db = (await client()).db(process.env.MONGODB_DB || "taskflow");
+    await ensureIndexes(db);
+    await seedIfEmpty(db);
+    return db;
+  })().catch((e) => {
+    g.__tfReady = undefined;
+    throw e;
+  }));
+}
+
+export async function col(name: CollName): Promise<Collection<Stored>> {
+  return (await getDb()).collection<Stored>(name);
+}
+
+export const now = () => new Date().toISOString();
+export const today = (offsetDays = 0) => new Date(Date.now() + offsetDays * 86400000).toISOString().slice(0, 10);
+
+/** `{_id, ...rest}` -> `{id, ...rest}` */
+export function toRow<T>(d: Doc | null | undefined): T | undefined {
+  if (!d) return undefined;
+  const { _id, ...rest } = d;
+  return { id: _id, ...rest } as T;
+}
+export const toRows = <T>(ds: Doc[]): T[] => ds.map((d) => toRow<T>(d)!);
+
+/** Atomically allocate the next numeric id for a collection. */
+export async function nextId(name: string): Promise<number> {
+  const counters = await col("counters");
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const r = await counters.findOneAndUpdate({ _id: name as never }, { $inc: { seq: 1 } }, { upsert: true, returnDocument: "after" });
+      return r!.seq as number;
+    } catch (e) {
+      // Two first-time upserts can race on the same _id; the retry then finds the document.
+      if (attempt >= 3 || (e as { code?: number }).code !== 11000) throw e;
+    }
   }
-  d.exec("CREATE INDEX IF NOT EXISTS idx_tickets_sprint ON tickets(sprint_id)");
 }
 
-function init(): DatabaseSync {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-  const d = new DatabaseSync(path.join(DATA_DIR, "taskflow.db"));
-  d.exec("PRAGMA busy_timeout = 15000;"); // first, so concurrent build workers wait instead of failing
-  d.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-  d.exec(SCHEMA);
-  d.exec("BEGIN IMMEDIATE");
-  migrate(d);
-  try { seed(d); d.exec("COMMIT"); } catch (e) { d.exec("ROLLBACK"); throw e; }
-  return d;
+async function ensureIndexes(db: Db) {
+  await Promise.all([
+    db.collection("users").createIndex({ email: 1 }, { unique: true }),
+    db.collection("boards").createIndex({ key: 1 }, { unique: true }),
+    db.collection("tickets").createIndex({ board_id: 1, number: 1 }, { unique: true }),
+    db.collection("tickets").createIndex({ assignee_id: 1 }),
+    db.collection("tickets").createIndex({ sprint_id: 1 }),
+    db.collection("comments").createIndex({ ticket_id: 1, created_at: -1 }),
+    db.collection("attachments").createIndex({ ticket_id: 1 }),
+    db.collection("activity").createIndex({ ticket_id: 1, _id: -1 }),
+    db.collection("sprints").createIndex({ board_id: 1 }),
+  ]);
 }
 
-/** First-run demo data: an admin, two teammates, three team boards with tickets. */
-function seed(d: DatabaseSync) {
-  const count = (d.prepare("SELECT COUNT(*) AS c FROM users").get() as { c: number }).c;
-  if (count > 0) return;
+/* ------------------------------ first-run seed ----------------------------- */
+
+async function seedIfEmpty(db: Db) {
+  if ((await db.collection("users").estimatedDocumentCount()) > 0) return;
+  // Only one process may seed (e.g. several workers starting together).
+  try {
+    await db.collection("meta").insertOne({ _id: "seeded" as never, at: now() });
+  } catch {
+    return;
+  }
+  const idFor = async (name: string) => {
+    const r = await db.collection("counters").findOneAndUpdate({ _id: name as never }, { $inc: { seq: 1 } }, { upsert: true, returnDocument: "after" });
+    return r!.seq as number;
+  };
+  const demo = process.env.SEED_DEMO_DATA !== "false";
   const hash = (p: string) => bcrypt.hashSync(p, 10);
-  const addUser = d.prepare("INSERT OR IGNORE INTO users (name,email,password_hash,role,color) VALUES (?,?,?,?,?)");
-  addUser.run("Admin", "admin@taskflow.dev", hash("admin123"), "admin", "#6554c0");
-  addUser.run("Priya Sharma", "priya@taskflow.dev", hash("password"), "member", "#36b37e");
-  addUser.run("Alex Morgan", "alex@taskflow.dev", hash("password"), "member", "#ff991f");
+  const ts = now();
 
-  const addBoard = d.prepare("INSERT OR IGNORE INTO boards (key,name,description,color) VALUES (?,?,?,?)");
-  addBoard.run("WEB", "Website Team", "Marketing site, docs and web platform.", "#2684ff");
-  addBoard.run("MOB", "Mobile App", "iOS and Android releases.", "#36b37e");
-  addBoard.run("OPS", "Infrastructure", "Cloud, CI/CD and reliability.", "#ff5630");
+  const user = async (name: string, email: string, password: string, role: string, color: string) => {
+    const id = await idFor("users");
+    await db.collection("users").insertOne({ _id: id as never, name, email: email.toLowerCase(), password_hash: hash(password), role, color, created_at: ts });
+    return id;
+  };
 
-  const demo: [string, string, string, string, string, string, number, number][] = [
-    // board, title, type, status, priority, description, assignee, progress
+  if (!demo) {
+    const email = process.env.ADMIN_EMAIL;
+    const password = process.env.ADMIN_PASSWORD;
+    if (!email || !password) {
+      await db.collection("meta").deleteOne({ _id: "seeded" as never });
+      throw new Error("SEED_DEMO_DATA=false needs ADMIN_EMAIL and ADMIN_PASSWORD in .env.local to create the first admin.");
+    }
+    await user(process.env.ADMIN_NAME || "Admin", email, password, "admin", "#6554c0");
+    return;
+  }
+
+  const admin = await user("Admin", "admin@taskflow.dev", "admin123", "admin", "#6554c0");
+  const priya = await user("Priya Sharma", "priya@taskflow.dev", "password", "member", "#36b37e");
+  const alex = await user("Alex Morgan", "alex@taskflow.dev", "password", "member", "#ff991f");
+  const people = [admin, priya, alex];
+
+  const boards: Record<string, number> = {};
+  const addBoard = async (key: string, name: string, description: string, color: string) => {
+    const id = await idFor("boards");
+    boards[key] = id;
+    await db.collection("boards").insertOne({ _id: id as never, key, name, description, color, counter: 0, created_at: ts });
+  };
+  await addBoard("WEB", "Website Team", "Marketing site, docs and web platform.", "#2684ff");
+  await addBoard("MOB", "Mobile App", "iOS and Android releases.", "#36b37e");
+  await addBoard("OPS", "Infrastructure", "Cloud, CI/CD and reliability.", "#ff5630");
+
+  // board, title, type, status, priority, description, assignee (1-based into people), progress
+  const rows: [string, string, string, string, string, string, number, number][] = [
     ["WEB", "Redesign the pricing page", "story", "in_progress", "high", "New layout with comparison table and FAQ section.", 2, 55],
     ["WEB", "Fix broken image on /about in Safari", "bug", "todo", "medium", "Hero image renders at 0px height on Safari 17.", 3, 0],
     ["WEB", "Add dark mode to docs", "task", "in_review", "low", "Respect prefers-color-scheme.", 2, 90],
@@ -152,55 +156,32 @@ function seed(d: DatabaseSync) {
     ["OPS", "Rotate database credentials", "task", "todo", "highest", "Quarterly rotation; update secrets manager.", 1, 0],
     ["OPS", "Cut CI time below 8 minutes", "story", "done", "medium", "Cache dependencies and parallelise test shards.", 2, 100],
   ];
-  const board = d.prepare("SELECT id FROM boards WHERE key = ?");
-  const bump = d.prepare("UPDATE boards SET counter = counter + 1 WHERE id = ? RETURNING counter");
-  const addTicket = d.prepare(
-    "INSERT INTO tickets (board_id,number,title,description,type,status,priority,assignee_id,reporter_id,progress) VALUES (?,?,?,?,?,?,?,?,1,?)",
-  );
-  const addAct = d.prepare("INSERT INTO activity (ticket_id,user_id,action) VALUES (?,1,'created')");
-  for (const [key, title, type, status, priority, desc, assignee, progress] of demo) {
-    const b = board.get(key) as { id: number };
-    const n = (bump.get(b.id) as { counter: number }).counter;
-    const r = addTicket.run(b.id, n, title, desc, type, status, priority, assignee, progress);
-    addAct.run(Number(r.lastInsertRowid));
+  const sprintOf: Record<string, number> = {};
+  for (const key of Object.keys(boards)) {
+    const sid = await idFor("sprints");
+    sprintOf[key] = sid;
+    await db.collection("sprints").insertOne({
+      _id: sid as never, board_id: boards[key], name: `${key} Sprint 1`, goal: "Ship the first milestone.",
+      start_date: today(-3), end_date: today(11), status: "active", completed_at: null, created_at: ts,
+    });
   }
-  d.prepare(
-    "INSERT INTO comments (ticket_id,user_id,body,kind,progress,hours) VALUES (1,2,'Wireframes approved, starting the comparison table.','progress',55,6)",
-  ).run();
-
-  // One active "Sprint 1" per board holding its first three tickets; the rest stay in the backlog.
-  for (const b of d.prepare("SELECT id, key FROM boards").all() as { id: number; key: string }[]) {
-    const s = d
-      .prepare("INSERT INTO sprints (board_id,name,goal,start_date,end_date,status) VALUES (?,?,?,date('now','-3 days'),date('now','+11 days'),'active')")
-      .run(b.id, `${b.key} Sprint 1`, "Ship the first milestone.");
-    d.prepare("UPDATE tickets SET sprint_id = ? WHERE board_id = ? AND number <= 3").run(Number(s.lastInsertRowid), b.id);
+  const firstTicket: number[] = [];
+  for (const [key, title, type, status, priority, description, who, progress] of rows) {
+    const board = await db.collection("boards").findOneAndUpdate({ _id: boards[key] as never }, { $inc: { counter: 1 } }, { returnDocument: "after" });
+    const number = board!.counter as number;
+    const id = await idFor("tickets");
+    if (firstTicket.length === 0) firstTicket.push(id);
+    await db.collection("tickets").insertOne({
+      _id: id as never, board_id: boards[key], number, title, description, type, status, priority,
+      assignee_id: people[who - 1], reporter_id: admin, progress, due_date: null,
+      sprint_id: number <= 3 ? sprintOf[key] : null, created_at: ts, updated_at: ts,
+    });
+    await db.collection("activity").insertOne({ _id: (await idFor("activity")) as never, ticket_id: id, user_id: admin, action: "created", field: null, old_value: null, new_value: null, created_at: ts });
   }
+  await db.collection("comments").insertOne({
+    _id: (await idFor("comments")) as never, ticket_id: firstTicket[0], user_id: priya, body: "Wireframes approved, starting the comparison table.",
+    kind: "progress", progress: 55, hours: 6, created_at: ts,
+  });
 }
 
-const g = globalThis as unknown as { __taskflowDb?: DatabaseSync };
-export const db: DatabaseSync = (g.__taskflowDb ??= init());
-
-type P = string | number | null | undefined;
-const clean = (p: P[]) => p.map((v) => (v === undefined ? null : v));
-
-export function all<T = Record<string, unknown>>(sql: string, ...p: P[]): T[] {
-  return db.prepare(sql).all(...clean(p)).map((r) => ({ ...r })) as T[];
-}
-export function get<T = Record<string, unknown>>(sql: string, ...p: P[]): T | undefined {
-  const r = db.prepare(sql).get(...clean(p));
-  return r ? ({ ...r } as T) : undefined;
-}
-export function run(sql: string, ...p: P[]) {
-  return db.prepare(sql).run(...clean(p));
-}
-export function tx<T>(fn: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const r = fn();
-    db.exec("COMMIT");
-    return r;
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
-}
+export type { Document };

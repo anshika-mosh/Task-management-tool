@@ -1,6 +1,6 @@
 import nodemailer, { type Transporter } from "nodemailer";
 import { after } from "next/server";
-import { get, run } from "./db";
+import { col, nextId, now } from "./db";
 import { priorityOf, statusOf } from "./constants";
 
 /**
@@ -33,12 +33,20 @@ type TicketRow = {
 };
 type UserRow = { id: number; name: string; email: string };
 
-const loadTicket = (id: number) =>
-  get<TicketRow>(
-    "SELECT t.id, b.key || '-' || t.number AS key, t.title, t.description, t.status, t.priority, t.assignee_id, t.reporter_id FROM tickets t JOIN boards b ON b.id = t.board_id WHERE t.id = ?",
-    id,
-  );
-const loadUser = (id: number | null) => (id ? get<UserRow>("SELECT id,name,email FROM users WHERE id = ?", id) : undefined);
+async function loadTicket(id: number): Promise<TicketRow | undefined> {
+  const t = await (await col("tickets")).findOne({ _id: id as never });
+  if (!t) return undefined;
+  const board = await (await col("boards")).findOne({ _id: t.board_id });
+  return {
+    id, key: `${board?.key ?? "?"}-${t.number}`, title: t.title, description: t.description ?? "", status: t.status, priority: t.priority,
+    assignee_id: t.assignee_id ?? null, reporter_id: t.reporter_id ?? null,
+  };
+}
+async function loadUser(id: number | null): Promise<UserRow | undefined> {
+  if (!id) return undefined;
+  const u = await (await col("users")).findOne({ _id: id as never }, { projection: { name: 1, email: 1 } });
+  return u ? { id, name: u.name, email: u.email } : undefined;
+}
 
 function layout(opts: { heading: string; intro: string; t: TicketRow; bodyHtml?: string }) {
   const { t } = opts;
@@ -65,19 +73,20 @@ const quote = (text: string) =>
   `<blockquote style="margin:0 0 16px;padding:8px 14px;border-left:3px solid #36b37e;background:#f0faf5;white-space:pre-wrap">${esc(text)}</blockquote>`;
 
 async function deliver(to: UserRow, subject: string, html: string, ticketKey: string) {
-  const row = run("INSERT INTO emails (to_email,to_name,subject,html,ticket_key) VALUES (?,?,?,?,?)", to.email, to.name, subject, html, ticketKey);
-  const id = Number(row.lastInsertRowid);
+  const emails = await col("emails");
+  const id = await nextId("emails");
+  await emails.insertOne({ _id: id as never, to_email: to.email, to_name: to.name, subject, html, ticket_key: ticketKey, status: "queued", error: null, created_at: now() });
   const tr = getTransport();
   if (!tr) {
-    run("UPDATE emails SET status = 'logged' WHERE id = ?", id);
+    await emails.updateOne({ _id: id as never }, { $set: { status: "logged" } });
     console.log(`[mail:outbox] to=${to.email} subject="${subject}"`);
     return;
   }
   try {
     await tr.sendMail({ from: FROM(), to: `${to.name} <${to.email}>`, subject, html });
-    run("UPDATE emails SET status = 'sent' WHERE id = ?", id);
+    await emails.updateOne({ _id: id as never }, { $set: { status: "sent" } });
   } catch (e) {
-    run("UPDATE emails SET status = 'failed', error = ? WHERE id = ?", String((e as Error).message).slice(0, 500), id);
+    await emails.updateOne({ _id: id as never }, { $set: { status: "failed", error: String((e as Error).message).slice(0, 500) } });
     console.error("[mail] send failed:", (e as Error).message);
   }
 }
@@ -91,9 +100,9 @@ function later(fn: () => Promise<void>) {
 /** The ticket was assigned (or reassigned) to someone: tell the new assignee. */
 export function notifyAssigned(ticketId: number, actorId: number) {
   later(async () => {
-    const t = loadTicket(ticketId);
-    const actor = loadUser(actorId);
-    const to = loadUser(t?.assignee_id ?? null);
+    const t = await loadTicket(ticketId);
+    const actor = await loadUser(actorId);
+    const to = await loadUser(t?.assignee_id ?? null);
     if (!t || !to || !actor || to.id === actor.id) return; // nobody needs an email about assigning themselves
     await deliver(
       to,
@@ -117,16 +126,16 @@ export function notifyAssigned(ticketId: number, actorId: number) {
  */
 export function notifyActivity(ticketId: number, actorId: number, what: string, posted?: string) {
   later(async () => {
-    const t = loadTicket(ticketId);
-    const actor = loadUser(actorId);
+    const t = await loadTicket(ticketId);
+    const actor = await loadUser(actorId);
     if (!t || !actor) return;
     let to: UserRow | undefined;
     let intro = "";
     if (t.assignee_id && t.assignee_id !== actorId) {
-      to = loadUser(t.assignee_id);
+      to = await loadUser(t.assignee_id);
       intro = `<b>${esc(actor.name)}</b> ${esc(what)} on a ticket assigned to you.`;
     } else if (t.reporter_id && t.reporter_id !== actorId) {
-      to = loadUser(t.reporter_id);
+      to = await loadUser(t.reporter_id);
       intro = t.assignee_id === actorId
         ? `The assignee, <b>${esc(actor.name)}</b>, ${esc(what)}.`
         : `<b>${esc(actor.name)}</b> ${esc(what)} on a ticket you reported.`;

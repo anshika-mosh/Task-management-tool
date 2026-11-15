@@ -8,10 +8,10 @@ import { CreateSprint, SprintCard } from "./SprintsClient";
 export default async function SprintsPage({ params }: { params: Promise<{ key: string }> }) {
   await requireUser();
   const { key } = await params;
-  const board = getBoardByKey(key);
+  const board = await getBoardByKey(key);
   if (!board) notFound();
-  const sprints = getSprints(board.id);
-  const tickets = getTickets({ boardId: board.id });
+  const sprints = await getSprints(board.id);
+  const tickets = await getTickets({ boardId: board.id });
   const open = sprints.filter((s) => s.status !== "completed").map((s) => ({ id: s.id, name: s.name }));
   const slim = (t: (typeof tickets)[number]) => ({
     id: t.id, key: t.key, title: t.title, type: t.type, status: t.status, priority: t.priority,

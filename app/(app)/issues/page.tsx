@@ -10,15 +10,16 @@ type SP = Record<string, string | undefined>;
 export default async function Issues({ searchParams }: { searchParams: Promise<SP> }) {
   const me = await requireUser();
   const sp = await searchParams;
-  const boards = getBoards();
-  const users = getUsers();
+  const boards = await getBoards();
+  const users = await getUsers();
   const board = boards.find((b) => b.key === sp.board);
-  const tickets = getTickets({ q: sp.q, boardId: board?.id, status: sp.status, type: sp.type, priority: sp.priority, assignee: sp.assignee === "me" ? String(me.id) : sp.assignee });
+  const tickets = await getTickets({ q: sp.q, boardId: board?.id, status: sp.status, type: sp.type, priority: sp.priority, assignee: sp.assignee === "me" ? String(me.id) : sp.assignee });
 
   return (
     <div className="page">
       <div className="page-head"><h1>All tickets</h1><span className="muted">{tickets.length} result{tickets.length === 1 ? "" : "s"}</span></div>
-      <form className="filters" method="get">
+      {/* key: remount when the URL's filters change (Reset / Back), otherwise the old selections stay on screen */}
+      <form key={JSON.stringify(sp)} className="filters" method="get">
         <input name="q" placeholder="Keyword or key…" defaultValue={sp.q} />
         <select name="board" defaultValue={sp.board ?? ""}><option value="">All boards</option>{boards.map((b) => <option key={b.id} value={b.key}>{b.name}</option>)}</select>
         <select name="status" defaultValue={sp.status ?? ""}><option value="">Any status</option>{STATUSES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select>

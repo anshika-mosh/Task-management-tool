@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
+import { uploadsEnabled } from "@/lib/db";
 import { getAttachments, getComments, getSprints, getTicketActivity, getTicketByKey, getUsers } from "@/lib/queries";
 import { PRIORITIES, STATUSES, TYPES } from "@/lib/constants";
 import { fullDate, timeAgo } from "@/lib/format";
@@ -11,13 +12,13 @@ import { AssignToMe, Attachments, CommentForm, DeleteComment, DeleteTicket, Desc
 export default async function TicketPage({ params }: { params: Promise<{ ticket: string }> }) {
   const me = await requireUser();
   const { ticket: key } = await params;
-  const t = getTicketByKey(key);
+  const t = await getTicketByKey(key);
   if (!t) notFound();
-  const users = getUsers();
-  const sprints = getSprints(t.board_id).filter((s) => s.status !== "completed" || s.id === t.sprint_id);
-  const comments = getComments(t.id);
-  const attachments = getAttachments(t.id);
-  const activity = getTicketActivity(t.id);
+  const users = await getUsers();
+  const sprints = (await getSprints(t.board_id)).filter((s) => s.status !== "completed" || s.id === t.sprint_id);
+  const comments = await getComments(t.id);
+  const attachments = await getAttachments(t.id);
+  const activity = await getTicketActivity(t.id);
   const updates = comments.filter((c) => c.kind === "progress");
   const canDelete = me.role === "admin" || t.reporter_id === me.id;
 
@@ -62,7 +63,7 @@ export default async function TicketPage({ params }: { params: Promise<{ ticket:
           <div className="section"><h3>Description</h3><DescriptionEditor id={t.id} value={t.description} /></div>
 
           <div className="section"><h3>Attachments ({attachments.length})</h3>
-            <Attachments ticketId={t.id} items={attachments} meId={me.id} isAdmin={me.role === "admin"} />
+            <Attachments ticketId={t.id} items={attachments} meId={me.id} isAdmin={me.role === "admin"} allowUploads={uploadsEnabled()} />
           </div>
 
           <div className="section"><h3>Post a progress update</h3><ProgressForm ticketId={t.id} current={t.progress} /></div>

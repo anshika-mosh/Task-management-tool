@@ -204,3 +204,8 @@ details.mail[open] > summary { background: var(--surface-2); }
 .activity-item { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 .activity-item:last-child { border: 0; }
 .empty-state { text-align: center; padding: 40px 16px; color: var(--muted); }
+
+.link-form { display: grid; grid-template-columns: 1fr 180px auto; gap: 8px; }
+@media (max-width: 700px) { .link-form { grid-template-columns: 1fr; } }
+.drive-frame { width: min(1100px, 94vw); height: 86vh; border: 0; border-radius: 6px; background: #000; }
+.open-drive { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); color: #fff; background: rgba(0,0,0,.6); padding: 4px 14px; border-radius: 16px; }

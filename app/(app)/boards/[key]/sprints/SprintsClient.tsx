@@ -1,6 +1,7 @@
 "use client";
+import { useFormAction } from "@/lib/use-form-action";
 import Link from "next/link";
-import { useActionState, useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { completeSprint, createSprint, deleteSprint, startSprint, updateTicket } from "@/lib/actions";
 import type { Sprint } from "@/lib/types";
 import { Avatar, PriorityIcon, ProgressBar, StatusLozenge, TypeIcon } from "@/components/ui";
@@ -9,13 +10,13 @@ type T = { id: number; key: string; title: string; type: string; status: string;
 type Opt = { id: number; name: string };
 
 export function CreateSprint({ boardId, boardKey, nextNumber }: { boardId: number; boardKey: string; nextNumber: number }) {
-  const [state, action, pending] = useActionState(createSprint.bind(null, boardId), undefined);
+  const { state, onSubmit, pending } = useFormAction(createSprint.bind(null, boardId));
   const ref = useRef<HTMLFormElement>(null);
   const [open, setOpen] = useState(false);
   useEffect(() => { if (state?.ok) { ref.current?.reset(); setOpen(false); } }, [state]);
   if (!open) return <button className="btn primary" style={{ marginBottom: 16 }} onClick={() => setOpen(true)}>+ Create sprint</button>;
   return (
-    <form action={action} ref={ref} className="card" style={{ marginBottom: 16 }}>
+    <form onSubmit={onSubmit} ref={ref} className="card" style={{ marginBottom: 16 }}>
       <h2>New sprint</h2>
       <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0 12px" }}>
         <div><label>Name *</label><input name="name" required defaultValue={`${boardKey} Sprint ${nextNumber}`} /></div>

@@ -11,7 +11,10 @@ export type Ticket = {
   sprint_id: number | null; sprint_name: string | null; sprint_status: string | null;
 };
 export type Comment = { id: number; ticket_id: number; user_id: number; user_name: string; user_color: string; body: string; kind: "comment" | "progress"; progress: number | null; hours: number | null; created_at: string };
-export type Attachment = { id: number; ticket_id: number; user_id: number; user_name: string; filename: string; mime: string; size: number; created_at: string };
+export type Attachment = {
+  id: number; ticket_id: number; user_id: number; user_name: string; filename: string; mime: string; size: number; created_at: string;
+  kind: "file" | "link"; link_type: "drive" | "image" | "video" | "web" | null; url: string | null; drive_id: string | null;
+};
 export type Activity = { id: number; ticket_id: number; user_id: number; user_name: string; user_color: string; action: string; field: string | null; old_value: string | null; new_value: string | null; created_at: string; ticket_key?: string; ticket_title?: string };
 
 export type Sprint = { id: number; board_id: number; name: string; goal: string; start_date: string | null; end_date: string | null; status: "planned" | "active" | "completed"; completed_at: string | null; created_at: string; total: number; done: number };
