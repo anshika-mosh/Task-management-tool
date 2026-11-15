@@ -13,15 +13,28 @@
     "test:e2e": "playwright test",
     "verify": "npm run typecheck && npm test",
     "verify:full": "npm run verify && npm run test:e2e",
-    "prepare": "git config core.hooksPath .githooks || exit 0"
+    "prepare": "git config core.hooksPath .githooks || exit 0",
+    "docs": "node docs/render-diagrams.mjs && node docs/build-docs.cjs"
   },
   "dependencies": {
+    "@tiptap/extension-highlight": "^3.34.0",
+    "@tiptap/extension-image": "^3.34.0",
+    "@tiptap/extension-link": "^3.34.0",
+    "@tiptap/extension-placeholder": "^3.34.0",
+    "@tiptap/extension-table": "^3.34.0",
+    "@tiptap/extension-task-item": "^3.34.0",
+    "@tiptap/extension-task-list": "^3.34.0",
+    "@tiptap/extension-text-align": "^3.34.0",
+    "@tiptap/pm": "^3.34.0",
+    "@tiptap/react": "^3.34.0",
+    "@tiptap/starter-kit": "^3.34.0",
     "bcryptjs": "^3.0.3",
     "mongodb": "^7.9.0",
     "next": "^16.4.6",
     "nodemailer": "^10.5.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "sanitize-html": "^2.18.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.1",
@@ -33,7 +46,10 @@
     "@types/nodemailer": "^8.0.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/sanitize-html": "^2.16.2",
+    "docx": "^9.15.4",
     "jsdom": "^31.0.1",
+    "mermaid": "^12.3.0",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
   }

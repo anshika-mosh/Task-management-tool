@@ -1,5 +1,5 @@
-import { expect, test } from "@playwright/test";
-import { createTicket, detail, login, logout, outboxSubjects } from "./helpers";
+import { expect, test } from "./fixtures";
+import { attachViaPaperclip, createTicket, detail, editDescription, editorBox, login, logout, outboxSubjects } from "./helpers";
 
 /**
  * Email rules (outbox mode: SMTP is unset in e2e, so every email is recorded for the admin to read):
@@ -34,7 +34,7 @@ test.describe.serial("email notifications", () => {
   test("a comment by someone other than the assignee emails the assignee with the comment", async ({ page }) => {
     await login(page, "admin");
     await page.goto(`/browse/${key}`);
-    await page.getByPlaceholder("Add a comment…").fill("Priya, please prioritise <b>this</b> today");
+    await editorBox(page, "Comment").fill("Priya, please prioritise <b>this</b> today");
     await page.getByRole("button", { name: "Comment", exact: true }).click();
     await expect(page.locator(".feed-item", { hasText: "please prioritise" })).toBeVisible();
 
@@ -50,7 +50,7 @@ test.describe.serial("email notifications", () => {
   test("when the assignee posts a progress update, the reporter is emailed what was posted", async ({ page }) => {
     await login(page, "priya");
     await page.goto(`/browse/${key}`);
-    await page.getByPlaceholder(/What did you get done/).fill("Started the investigation");
+    await editorBox(page, "Progress update").fill("Started the investigation");
     await page.locator('input[type="range"]').fill("35");
     await page.getByPlaceholder("0", { exact: true }).fill("1.5");
     await page.getByRole("button", { name: "Post update" }).click();
@@ -81,9 +81,8 @@ test.describe.serial("email notifications", () => {
     await page.goto(`/browse/${key}`);
     await detail(page, "Priority").selectOption("highest");
     await expect(detail(page, "Priority")).toHaveValue("highest");
-    await page.getByLabel("Link URL").fill("https://example.com/spec.png");
-    await page.getByLabel("Link name").fill("Spec");
-    await page.getByRole("button", { name: /Attach link/ }).click();
+    await editDescription(page);
+    await attachViaPaperclip(page, page.locator(".rte").first(), "https://example.com/spec.png", "Spec");
     await expect(page.locator(".att", { hasText: "Spec" })).toBeVisible();
     const subjects = await outboxSubjects(page);
     expect(subjects).toContain(`[${key}] Admin changed Priority from medium to highest`);
@@ -99,7 +98,7 @@ test.describe.serial("email notifications", () => {
     await expect(page.locator(".assigned-strip")).toContainText("Admin");
     await detail(page, "Sprint").selectOption({ label: "Backlog (no sprint)" }); // sprint planning is silent
     await expect(detail(page, "Sprint")).toHaveValue("");
-    await page.getByPlaceholder("Add a comment…").fill("note to self");
+    await editorBox(page, "Comment").fill("note to self");
     await page.getByRole("button", { name: "Comment", exact: true }).click(); // admin is now reporter AND assignee
     await expect(page.locator(".feed-item", { hasText: "note to self" })).toBeVisible();
     expect((await outboxSubjects(page)).length).toBe(before);

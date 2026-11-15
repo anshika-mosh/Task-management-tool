@@ -2,6 +2,7 @@ import nodemailer, { type Transporter } from "nodemailer";
 import { after } from "next/server";
 import { col, nextId, now } from "./db";
 import { priorityOf, statusOf } from "./constants";
+import { richToText, toSafeHtml } from "./rich";
 
 /**
  * Email notifications.
@@ -69,8 +70,12 @@ function layout(opts: { heading: string; intro: string; t: TicketRow; bodyHtml?:
 </div></body></html>`;
 }
 
-const quote = (text: string) =>
-  `<blockquote style="margin:0 0 16px;padding:8px 14px;border-left:3px solid #36b37e;background:#f0faf5;white-space:pre-wrap">${esc(text)}</blockquote>`;
+/** What was posted, as a quoted block: formatted (sanitized) HTML, or plain text if it is very long. */
+const quote = (content: string) => {
+  const text = richToText(content);
+  const inner = text.length > 3000 ? `<p>${esc(text.slice(0, 3000))}…</p>` : toSafeHtml(content);
+  return `<blockquote style="margin:0 0 16px;padding:4px 14px;border-left:3px solid #36b37e;background:#f0faf5">${inner}</blockquote>`;
+};
 
 async function deliver(to: UserRow, subject: string, html: string, ticketKey: string) {
   const emails = await col("emails");
@@ -111,7 +116,7 @@ export function notifyAssigned(ticketId: number, actorId: number) {
         heading: "A ticket was assigned to you",
         intro: `<b>${esc(actor.name)}</b> assigned this ticket to you.`,
         t,
-        bodyHtml: t.description ? quote(t.description.slice(0, 600)) : undefined,
+        bodyHtml: richToText(t.description) ? quote(t.description) : undefined,
       }),
       t.key,
     );
@@ -144,7 +149,7 @@ export function notifyActivity(ticketId: number, actorId: number, what: string, 
     await deliver(
       to,
       `[${t.key}] ${actor.name} ${what}`,
-      layout({ heading: `${t.key} was updated`, intro, t, bodyHtml: posted ? quote(posted.slice(0, 2000)) : undefined }),
+      layout({ heading: `${t.key} was updated`, intro, t, bodyHtml: posted && richToText(posted) ? quote(posted) : undefined }),
       t.key,
     );
   });

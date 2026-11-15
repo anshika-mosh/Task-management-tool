@@ -57,6 +57,17 @@ vi.mock("next/server", async (importOriginal) => ({
 // `cache` only exists in React's server build; outside Next it is a plain pass-through.
 vi.mock("react", async (importOriginal) => ({ ...(await importOriginal<typeof import("react")>()), cache: <T,>(fn: T) => fn }));
 
+
+/* ----------------------- jsdom gaps used by the editor ---------------------- */
+// ProseMirror measures ranges/elements while moving the selection; jsdom has no layout, so return zeros.
+if (typeof window !== "undefined" && typeof Range !== "undefined") {
+  const rect = () => ({ x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, toJSON: () => ({}) }) as DOMRect;
+  Range.prototype.getBoundingClientRect = rect;
+  Range.prototype.getClientRects = () => ({ length: 0, item: () => null, [Symbol.iterator]: function* () {} }) as unknown as DOMRectList;
+  document.elementFromPoint = () => null;
+  if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {};
+}
+
 /* -------------------------------- cleanup --------------------------------- */
 
 afterAll(async () => {

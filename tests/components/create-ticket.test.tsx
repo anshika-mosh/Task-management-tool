@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { router } from "../mocks/state";
+import { editorAt, typeInto } from "./utils";
 import type { Board, User } from "@/lib/types";
 
 const actions = vi.hoisted(() => ({ createTicket: vi.fn() }));
@@ -68,7 +69,8 @@ describe("CreateTicket dialog", () => {
   it("creates the ticket and opens it", async () => {
     renderIt();
     fireEvent.change(field("title"), { target: { value: "Fix login" } });
-    fireEvent.change(field("description"), { target: { value: "Steps…" } });
+    await screen.findByRole("toolbar");
+    typeInto(0, "Steps…");
     fireEvent.change(field("type"), { target: { value: "bug" } });
     fireEvent.change(field("priority"), { target: { value: "highest" } });
     fireEvent.change(field("assignee"), { target: { value: "11" } });
@@ -76,7 +78,7 @@ describe("CreateTicket dialog", () => {
     submit();
     await waitFor(() => expect(router.push).toHaveBeenCalledWith("/browse/WEB-7"));
     expect(actions.createTicket).toHaveBeenCalledWith({
-      boardId: 1, title: "Fix login", description: "Steps…", type: "bug", priority: "highest", assigneeId: 11, dueDate: "2026-12-31", sprintId: 100, links: [],
+      boardId: 1, title: "Fix login", description: "<p>Steps…</p>", type: "bug", priority: "highest", assigneeId: 11, dueDate: "2026-12-31", sprintId: 100, links: [],
     });
     expect(onClose).toHaveBeenCalled();
   });
@@ -107,52 +109,59 @@ describe("CreateTicket dialog", () => {
   });
 });
 
-describe("attaching Google Drive links while creating", () => {
-  const url = () => screen.getByLabelText("Link URL") as HTMLInputElement;
-  const name = () => screen.getByLabelText("Link name") as HTMLInputElement;
+describe("description editor and attachments while creating", () => {
   const DRIVE = "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrSt/view";
 
-  it("adds a link to the list with the Add button and clears the inputs", () => {
+  it("has the Word-style toolbar, and no separate Drive-link block any more", async () => {
     renderIt();
-    fireEvent.change(url(), { target: { value: DRIVE } });
-    fireEvent.change(name(), { target: { value: "Mockup.png" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    expect(screen.getByText(/Mockup\.png/)).toBeInTheDocument();
-    expect(url().value).toBe("");
-    expect(name().value).toBe("");
+    const bar = await screen.findByRole("toolbar", { name: "Formatting" });
+    for (const label of ["Heading 1", "Bold", "Bullet list", "Numbered list", "Checklist", "Code block", "Quote", "Table", "Link", "Attach image, video or file"]) {
+      expect(within(bar).getByRole("button", { name: label })).toBeInTheDocument();
+    }
+    expect(screen.queryByLabelText("Link URL")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Images & videos \(Google Drive links\)/)).not.toBeInTheDocument();
   });
 
-  it("Enter in the URL box adds the link instead of submitting the form", () => {
+  it("sends the formatted description as HTML", async () => {
     renderIt();
-    fireEvent.change(url(), { target: { value: DRIVE } });
-    fireEvent.keyDown(url(), { key: "Enter" });
-    expect(screen.getByText(/1AbCdEfGhIjKlMnOpQrSt\/view/)).toBeInTheDocument();
-    expect(actions.createTicket).not.toHaveBeenCalled();
-  });
-
-  it("ignores an empty Add, and removes links again", () => {
-    renderIt();
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
-    fireEvent.change(url(), { target: { value: DRIVE } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    expect(screen.queryByText(/1AbCdEfGhIjKlMnOpQrSt\/view/)).not.toBeInTheDocument();
-  });
-
-  it("submits added links, plus a link that was typed but never added", async () => {
-    renderIt();
-    fireEvent.change(field("title"), { target: { value: "With media" } });
-    fireEvent.change(url(), { target: { value: DRIVE } });
-    fireEvent.change(name(), { target: { value: "A.png" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    fireEvent.change(url(), { target: { value: "https://cdn.test/clip.mp4" } });
+    await screen.findByRole("toolbar");
+    fireEvent.change(field("title"), { target: { value: "Rich" } });
+    typeInto(0, "Steps");
+    act(() => { editorAt().chain().focus().selectAll().toggleOrderedList().run(); });
     submit();
     await waitFor(() => expect(actions.createTicket).toHaveBeenCalled());
-    expect(actions.createTicket.mock.calls[0][0].links).toEqual([
-      { url: DRIVE, name: "A.png" },
-      { url: "https://cdn.test/clip.mp4", name: "" },
-    ]);
+    expect(actions.createTicket.mock.calls[0][0].description).toMatch(/^<ol><li><p>Steps<\/p><\/li><\/ol>/);
+  });
+
+  async function attachViaPaperclip(url: string, name: string) {
+    fireEvent.click(screen.getByRole("button", { name: "Attach image, video or file" }));
+    const dialog = await screen.findByRole("dialog", { name: "Attach image, video or file" });
+    fireEvent.change(within(dialog).getByLabelText("Link"), { target: { value: url } });
+    fireEvent.change(within(dialog).getByLabelText(/Name/), { target: { value: name } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Attach" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Attach image, video or file" })).not.toBeInTheDocument());
+  }
+
+  it("a file attached with the paperclip is inserted into the text and becomes an attachment of the new ticket", async () => {
+    renderIt();
+    await screen.findByRole("toolbar");
+    fireEvent.change(field("title"), { target: { value: "With media" } });
+    await attachViaPaperclip(DRIVE, "A.png");
+    expect(editorAt().getHTML()).toContain('data-drive-id="1AbCdEfGhIjKlMnOpQrSt"');
+    submit();
+    await waitFor(() => expect(actions.createTicket).toHaveBeenCalled());
+    expect(actions.createTicket.mock.calls[0][0].links).toEqual([{ url: DRIVE, name: "A.png" }]);
+  });
+
+  it("an attachment that was deleted from the text again is not attached", async () => {
+    renderIt();
+    await screen.findByRole("toolbar");
+    fireEvent.change(field("title"), { target: { value: "Removed media" } });
+    await attachViaPaperclip(DRIVE, "A.png");
+    act(() => { editorAt().commands.clearContent(true); });
+    submit();
+    await waitFor(() => expect(actions.createTicket).toHaveBeenCalled());
+    expect(actions.createTicket.mock.calls[0][0].links).toEqual([]);
   });
 });
 

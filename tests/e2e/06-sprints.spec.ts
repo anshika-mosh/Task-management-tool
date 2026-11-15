@@ -1,5 +1,6 @@
-import { expect, test, type Page } from "@playwright/test";
-import { createTicket, detail, login } from "./helpers";
+import type { Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
+import { confirmModal, createTicket, detail, login } from "./helpers";
 
 // Sprints are exercised on the MOB board so the WEB board's demo sprint stays untouched for other specs.
 const sprintCard = (page: Page, name: string) => page.locator(".sprint-card").filter({ has: page.getByRole("heading", { name, exact: true }) });
@@ -118,8 +119,8 @@ test.describe.serial("sprints & backlog", () => {
     await page.locator('input[name="name"]').fill("E2E Disposable");
     await page.getByRole("button", { name: "Create sprint", exact: true }).click();
     await expect(sprintCard(page, "E2E Disposable")).toBeVisible();
-    page.once("dialog", (d) => d.accept());
     await sprintCard(page, "E2E Disposable").getByRole("button", { name: "Delete" }).click();
+    await confirmModal(page, true);
     await expect(sprintCard(page, "E2E Disposable")).toHaveCount(0);
   });
 });

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { createBoard, createUser, deleteBoard, deleteUser, setUserRole, updateBoard } from "@/lib/actions";
 import { BOARD_COLORS } from "@/lib/constants";
+import { useConfirm } from "@/components/ConfirmProvider";
 import type { BoardStats, User } from "@/lib/types";
 import { Avatar, BoardAvatar } from "@/components/ui";
 
@@ -51,6 +52,7 @@ function BoardRow({ b }: { b: BoardStats }) {
   const [editing, setEditing] = useState(false);
   const { state, onSubmit, pending } = useFormAction(updateBoard.bind(null, b.id));
   const [del, startDel] = useTransition();
+  const confirm = useConfirm();
   useEffect(() => { if (state?.ok) setEditing(false); }, [state]);
   if (editing)
     return (
@@ -74,7 +76,7 @@ function BoardRow({ b }: { b: BoardStats }) {
         <div className="muted small">{b.total} ticket{b.total === 1 ? "" : "s"}{b.description ? ` · ${b.description}` : ""}</div>
       </div>
       <button className="btn sm" onClick={() => setEditing(true)}>Edit</button>
-      <button className="btn danger sm" disabled={del} onClick={() => confirm(`Delete board ${b.key} and its ${b.total} ticket(s)? This cannot be undone.`) && startDel(() => deleteBoard(b.id))}>Delete</button>
+      <button className="btn danger sm" disabled={del} onClick={async () => { if (await confirm({ title: `Delete board ${b.key}?`, message: `“${b.name}” and its ${b.total} ticket${b.total === 1 ? "" : "s"} (with comments, history and attachments) will be permanently deleted. This cannot be undone.`, confirmLabel: "Delete board", danger: true })) startDel(() => deleteBoard(b.id)); }}>Delete</button>
     </div>
   );
 }
@@ -113,6 +115,7 @@ export function UserForms() {
 
 export function UserRow({ user, isMe }: { user: User; isMe: boolean }) {
   const [pending, start] = useTransition();
+  const confirm = useConfirm();
   return (
     <tr>
       <td><span className="row"><Avatar name={user.name} color={user.color} size={28} />{user.name}{isMe && <span className="muted small">(you)</span>}</span></td>
@@ -123,7 +126,7 @@ export function UserRow({ user, isMe }: { user: User; isMe: boolean }) {
         </select>
       </td>
       <td style={{ textAlign: "right" }}>
-        {!isMe && <button className="btn danger sm" disabled={pending} onClick={() => confirm(`Remove ${user.name}? Their comments will be deleted; their tickets become unassigned.`) && start(() => deleteUser(user.id))}>Remove</button>}
+        {!isMe && <button className="btn danger sm" disabled={pending} onClick={async () => { if (await confirm({ title: `Remove ${user.name}?`, message: "Their comments and history entries will be deleted and their tickets become unassigned.", confirmLabel: "Remove user", danger: true })) start(() => deleteUser(user.id)); }}>Remove</button>}
       </td>
     </tr>
   );

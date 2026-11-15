@@ -23,7 +23,8 @@ describe("ThemeToggle (light / dark mode)", () => {
   it("starts from the theme chosen before first paint and offers the opposite", async () => {
     document.documentElement.dataset.theme = "dark";
     render(<ThemeToggle />);
-    expect(await screen.findByRole("button", { name: "Switch to light mode" })).toHaveTextContent("☀️");
+    const btn = await screen.findByRole("button", { name: "Switch to light mode" });
+    expect(btn.querySelector("svg")).toBeInTheDocument(); // sun icon
   });
 
   it("toggles dark -> light -> dark, updating <html data-theme> and remembering the choice", async () => {

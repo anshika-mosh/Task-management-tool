@@ -72,7 +72,7 @@ export default function Kanban({ tickets, users, meId, showSprint }: { tickets: 
                   draggable
                   onDragStart={(e) => { setDragId(t.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(t.id)); }}
                   onDragEnd={() => { setDragId(null); setOverCol(null); }}
-                  style={{ borderLeftColor: PRIORITIES.find((p) => p.id === t.priority)?.color }}
+                  style={{ ["--stripe" as string]: PRIORITIES.find((p) => p.id === t.priority)?.color }}
                 >
                   <div className="title">{t.title}</div>
                   {showSprint && <div style={{ marginBottom: 8 }}><span className="pill">{t.sprint_name ?? "Backlog"}</span></div>}

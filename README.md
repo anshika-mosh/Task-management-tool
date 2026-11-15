@@ -68,6 +68,14 @@ You never get an email about your own action, and sprint moves don't send mail. 
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_SECURE` / `MAIL_FROM` / `APP_URL` | Email delivery (see above) |
 | `COOKIE_SECURE`  | Set to `true` when serving over HTTPS                |
 
+## Documentation
+
+`docs/TaskFlow-Documentation.docx` is the full product document: scope and roles, every feature, how the website works (12 diagrams), data model and business rules, API reference, configuration, testing and security. Regenerate it after changing features or APIs:
+
+```bash
+npm run docs     # renders docs/diagrams/diagrams.mjs to PNG (via Chrome), then builds the .docx
+```
+
 ## Testing
 
 Every use case has automated tests, and they are meant to be run after **every** change.
