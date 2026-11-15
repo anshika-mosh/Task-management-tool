@@ -7,10 +7,10 @@ import ActivityLine from "@/components/ActivityLine";
 
 export default async function Home() {
   const user = await requireUser();
-  const boards = getBoardStats();
-  const mine = getTickets({ mine: user.id }).filter((t) => t.status !== "done");
-  const activity = getRecentActivity(10);
-  const activeSprints = new Map(getOpenSprints().filter((s) => s.status === "active").map((s) => [s.board_id, s]));
+  const boards = await getBoardStats();
+  const mine = (await getTickets({ mine: user.id })).filter((t) => t.status !== "done");
+  const activity = await getRecentActivity(10);
+  const activeSprints = new Map((await getOpenSprints()).filter((s) => s.status === "active").map((s) => [s.board_id, s]));
   const sum = (k: "total" | "todo" | "in_progress" | "in_review" | "done") => boards.reduce((n, b) => n + b[k], 0);
   const total = sum("total");
   const donePct = total ? Math.round((sum("done") / total) * 100) : 0;

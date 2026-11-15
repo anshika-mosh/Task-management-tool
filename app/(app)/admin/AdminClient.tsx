@@ -1,6 +1,7 @@
 "use client";
+import { useFormAction } from "@/lib/use-form-action";
 import Link from "next/link";
-import { useActionState, useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { createBoard, createUser, deleteBoard, deleteUser, setUserRole, updateBoard } from "@/lib/actions";
 import { BOARD_COLORS } from "@/lib/constants";
 import type { BoardStats, User } from "@/lib/types";
@@ -17,7 +18,7 @@ function Colors({ value }: { value: string }) {
 }
 
 function CreateBoard() {
-  const [state, action, pending] = useActionState(createBoard, undefined);
+  const { state, onSubmit, pending } = useFormAction(createBoard);
   const ref = useRef<HTMLFormElement>(null);
   const [key, setKey] = useState("");
   const [touched, setTouched] = useState(false);
@@ -28,7 +29,7 @@ function CreateBoard() {
     setKey((words.length > 1 ? words.map((w) => w[0]).join("") : (words[0] ?? "")).slice(0, 5));
   };
   return (
-    <form action={action} ref={ref} className="card">
+    <form onSubmit={onSubmit} ref={ref} className="card">
       <h2>Create a board</h2>
       <p className="muted small" style={{ margin: "4px 0 0" }}>The key prefixes every ticket on the board — e.g. <b>WEB-1</b>, <b>WEB-2</b>.</p>
       <div className="two">
@@ -48,12 +49,12 @@ function CreateBoard() {
 
 function BoardRow({ b }: { b: BoardStats }) {
   const [editing, setEditing] = useState(false);
-  const [state, action, pending] = useActionState(updateBoard.bind(null, b.id), undefined);
+  const { state, onSubmit, pending } = useFormAction(updateBoard.bind(null, b.id));
   const [del, startDel] = useTransition();
   useEffect(() => { if (state?.ok) setEditing(false); }, [state]);
   if (editing)
     return (
-      <form action={action} className="card" style={{ marginBottom: 12 }}>
+      <form onSubmit={onSubmit} className="card" style={{ marginBottom: 12 }}>
         <div className="muted small">Key <b>{b.key}</b> can&apos;t be changed after tickets exist.</div>
         <label>Name</label><input name="name" defaultValue={b.name} required />
         <label>Description</label><input name="description" defaultValue={b.description} />
@@ -91,11 +92,11 @@ export function BoardForms({ boards }: { boards: BoardStats[] }) {
 }
 
 export function UserForms() {
-  const [state, action, pending] = useActionState(createUser, undefined);
+  const { state, onSubmit, pending } = useFormAction(createUser);
   const ref = useRef<HTMLFormElement>(null);
   useEffect(() => { if (state?.ok) ref.current?.reset(); }, [state]);
   return (
-    <form action={action} ref={ref} className="card">
+    <form onSubmit={onSubmit} ref={ref} className="card">
       <h2>Add a team member</h2>
       <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0 12px" }}>
         <div><label>Name</label><input name="name" required /></div>

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Runs before every `git commit`: type-check + unit/integration/component tests.
+# (End-to-end tests are slower: run `npm run verify:full` before opening a PR; CI runs them too.)
+# Needs a local MongoDB for the integration tests (see README). Bypass in an emergency: git commit --no-verify
+echo "pre-commit: running npm run verify …"
+npm run verify --silent || {
+  echo ""
+  echo "✖ Commit blocked: type-check or tests failed. Fix them (or use --no-verify if you really must)."
+  exit 1
+}

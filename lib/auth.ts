@@ -4,7 +4,7 @@ import path from "node:path";
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { DATA_DIR, get } from "./db";
+import { DATA_DIR, col, toRow } from "./db";
 import type { User } from "./types";
 
 const COOKIE = "tf_session";
@@ -49,7 +49,8 @@ export const getCurrentUser = cache(async (): Promise<User | null> => {
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
   if (Number(exp) < Date.now()) return null;
-  return get<User>("SELECT id,name,email,role,color,created_at FROM users WHERE id = ?", Number(id)) ?? null;
+  const doc = await (await col("users")).findOne({ _id: Number(id) as never }, { projection: { password_hash: 0 } });
+  return toRow<User>(doc) ?? null;
 });
 
 export async function requireUser(): Promise<User> {

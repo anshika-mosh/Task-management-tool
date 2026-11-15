@@ -8,7 +8,7 @@ const COLORS: Record<string, string> = { sent: "#36b37e", failed: "#de350b", log
 
 export default async function MailOutbox() {
   await requireAdmin();
-  const emails = getEmails(100);
+  const emails = await getEmails(100);
   const smtp = smtpConfigured();
   return (
     <div className="page">

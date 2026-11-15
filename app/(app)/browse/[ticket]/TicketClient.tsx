@@ -1,10 +1,12 @@
 "use client";
-import { useActionState, useEffect, useRef, useState, useTransition } from "react";
+import { useFormAction } from "@/lib/use-form-action";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { addComment, addProgress, deleteAttachment, deleteComment, deleteTicket, updateTicket } from "@/lib/actions";
+import { addComment, addLinkAttachment, addProgress, deleteAttachment, deleteComment, deleteTicket, updateTicket } from "@/lib/actions";
 import type { Attachment } from "@/lib/types";
 import { formatSize, timeAgo } from "@/lib/format";
 import { uploadFiles } from "@/components/uploader";
+import { drivePreview, driveThumb } from "@/lib/links";
 
 type Opt = { id: string | number; label: string };
 
@@ -91,11 +93,11 @@ export function Tabs({ tabs }: { tabs: { id: string; label: string; content: Rea
 }
 
 export function CommentForm({ ticketId }: { ticketId: number }) {
-  const [state, action, pending] = useActionState(addComment.bind(null, ticketId), undefined);
+  const { state, onSubmit, pending } = useFormAction(addComment.bind(null, ticketId));
   const ref = useRef<HTMLFormElement>(null);
   useEffect(() => { if (state?.ok) ref.current?.reset(); }, [state]);
   return (
-    <form action={action} ref={ref}>
+    <form onSubmit={onSubmit} ref={ref}>
       <textarea name="body" rows={3} placeholder="Add a comment…" required />
       {state?.error && <p className="err">{state.error}</p>}
       <button className="btn primary sm" style={{ marginTop: 8 }} disabled={pending}>{pending ? "Saving…" : "Comment"}</button>
@@ -104,13 +106,13 @@ export function CommentForm({ ticketId }: { ticketId: number }) {
 }
 
 export function ProgressForm({ ticketId, current }: { ticketId: number; current: number }) {
-  const [state, action, pending] = useActionState(addProgress.bind(null, ticketId), undefined);
+  const { state, onSubmit, pending } = useFormAction(addProgress.bind(null, ticketId));
   const ref = useRef<HTMLFormElement>(null);
   const [pct, setPct] = useState(current);
   useEffect(() => setPct(current), [current]);
   useEffect(() => { if (state?.ok) ref.current?.reset(); }, [state]);
   return (
-    <form action={action} ref={ref}>
+    <form onSubmit={onSubmit} ref={ref}>
       <textarea name="body" rows={3} placeholder="What did you get done? Blockers? Next steps?" required />
       <div className="seg" style={{ marginTop: 8 }}>
         <div>
@@ -131,10 +133,47 @@ export function ProgressForm({ ticketId, current }: { ticketId: number; current:
 
 /* ------------------------------ attachments ------------------------------ */
 
-const isImage = (m: string) => m.startsWith("image/");
-const isVideo = (m: string) => m.startsWith("video/");
+type Media = "drive" | "image" | "video" | "pdf" | "file" | "web";
 
-export function Attachments({ ticketId, items, meId, isAdmin }: { ticketId: number; items: Attachment[]; meId: number; isAdmin: boolean }) {
+function mediaOf(a: Attachment): Media {
+  if (a.kind === "link") return a.link_type ?? "web";
+  if (a.mime.startsWith("image/")) return "image";
+  if (a.mime.startsWith("video/")) return "video";
+  if (a.mime === "application/pdf") return "pdf";
+  return "file";
+}
+const srcOf = (a: Attachment) => (a.kind === "link" ? a.url! : `/api/files/${a.id}`);
+const previewable = (m: Media) => m === "drive" || m === "image" || m === "video";
+const ICON: Record<Media, string> = { drive: "🖼️", image: "🖼️", video: "🎬", pdf: "📕", file: "📄", web: "🔗" };
+
+function Thumb({ a, media }: { a: Attachment; media: Media }) {
+  const [failed, setFailed] = useState(false);
+  if (media === "drive" && a.drive_id && !failed)
+    return /* eslint-disable-next-line @next/next/no-img-element */ <img src={driveThumb(a.drive_id)} alt={a.filename} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
+  if (media === "image" && !failed)
+    return /* eslint-disable-next-line @next/next/no-img-element */ <img src={srcOf(a)} alt={a.filename} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
+  if (media === "video" && !failed) return <video src={srcOf(a) + "#t=0.5"} preload="metadata" muted onError={() => setFailed(true)} />;
+  return <span>{ICON[media]}</span>;
+}
+
+export function AddLink({ ticketId }: { ticketId: number }) {
+  const { state, onSubmit, pending } = useFormAction(addLinkAttachment.bind(null, ticketId));
+  const ref = useRef<HTMLFormElement>(null);
+  useEffect(() => { if (state?.ok) ref.current?.reset(); }, [state]);
+  return (
+    <form onSubmit={onSubmit} ref={ref}>
+      <div className="link-form">
+        <input name="url" type="url" required placeholder="Paste a Google Drive link (image, video, file) or any URL…" aria-label="Link URL" />
+        <input name="name" placeholder="Name (optional)" aria-label="Link name" />
+        <button className="btn primary" disabled={pending}>{pending ? "Attaching…" : "🔗 Attach link"}</button>
+      </div>
+      <p className="muted small" style={{ margin: "6px 0 0" }}>In Drive: Share → General access → <b>Anyone with the link</b> → Copy link, so teammates can view it.</p>
+      {state?.error && <p className="err">{state.error}</p>}
+    </form>
+  );
+}
+
+export function Attachments({ ticketId, items, meId, isAdmin, allowUploads }: { ticketId: number; items: Attachment[]; meId: number; isAdmin: boolean; allowUploads: boolean }) {
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
@@ -144,14 +183,15 @@ export function Attachments({ ticketId, items, meId, isAdmin }: { ticketId: numb
   const [, start] = useTransition();
 
   async function upload(files: File[]) {
-    if (!files.length) return;
+    if (!allowUploads || !files.length) return;
     setErr(""); setPct(0);
     try { await uploadFiles(ticketId, files, setPct); router.refresh(); } catch (e) { setErr((e as Error).message); }
     setPct(null);
   }
 
-  // Paste screenshots straight into the ticket (like Jira).
+  // Paste screenshots straight into the ticket (only when local uploads are enabled).
   useEffect(() => {
+    if (!allowUploads) return;
     const onPaste = (e: ClipboardEvent) => {
       const el = document.activeElement as HTMLElement | null;
       if (el && /^(INPUT|TEXTAREA)$/.test(el.tagName) && !(e.clipboardData?.files.length)) return;
@@ -169,48 +209,62 @@ export function Attachments({ ticketId, items, meId, isAdmin }: { ticketId: numb
     return () => document.removeEventListener("keydown", k);
   }, [preview]);
 
+  const pm = preview ? mediaOf(preview) : null;
+
   return (
     <div>
-      <div
-        className={"dropzone" + (over ? " over" : "")}
-        onClick={() => input.current?.click()}
-        onDragOver={(e) => { e.preventDefault(); setOver(true); }}
-        onDragLeave={() => setOver(false)}
-        onDrop={(e) => { e.preventDefault(); setOver(false); upload(Array.from(e.dataTransfer.files)); }}
-      >
-        📎 Drop images, videos or files here, <u>browse</u>, or paste a screenshot
-        <input ref={input} type="file" multiple hidden onChange={(e) => { upload(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
-      </div>
+      <AddLink ticketId={ticketId} />
+      {allowUploads && (
+        <div
+          className={"dropzone" + (over ? " over" : "")}
+          style={{ marginTop: 12 }}
+          onClick={() => input.current?.click()}
+          onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(e) => { e.preventDefault(); setOver(false); upload(Array.from(e.dataTransfer.files)); }}
+        >
+          📎 Or drop files here, <u>browse</u>, or paste a screenshot
+          <input ref={input} type="file" multiple hidden onChange={(e) => { upload(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
+        </div>
+      )}
       {pct !== null && <div className="upload-row"><div className="progress"><div style={{ width: `${pct}%` }} /></div>Uploading… {pct}%</div>}
       {err && <p className="err">{err}</p>}
       {items.length > 0 && (
         <div className="att-grid">
           {items.map((a) => {
-            const src = `/api/files/${a.id}`;
+            const media = mediaOf(a);
             const canDelete = a.user_id === meId || isAdmin;
             return (
               <div className="att" key={a.id}>
-                <button className="thumb" onClick={() => (isImage(a.mime) || isVideo(a.mime)) ? setPreview(a) : window.open(src, "_blank")} aria-label={`Open ${a.filename}`}>
-                  {isImage(a.mime) ? /* eslint-disable-next-line @next/next/no-img-element */ <img src={src} alt={a.filename} loading="lazy" />
-                    : isVideo(a.mime) ? <video src={src + "#t=0.5"} preload="metadata" muted />
-                    : a.mime === "application/pdf" ? "📕" : "📄"}
+                <button className="thumb" onClick={() => (previewable(media) ? setPreview(a) : window.open(srcOf(a), "_blank", "noopener"))} aria-label={`Open ${a.filename}`}>
+                  <Thumb a={a} media={media} />
                 </button>
                 <div className="info">
-                  <a href={`${src}?download=1`} className="name" title={a.filename}>{a.filename}</a>
-                  <span className="muted">{formatSize(a.size)} · {a.user_name} · {timeAgo(a.created_at)}</span>
+                  <a href={a.kind === "link" ? a.url! : `${srcOf(a)}?download=1`} {...(a.kind === "link" ? { target: "_blank", rel: "noopener noreferrer" } : {})} className="name" title={a.filename}>{a.filename}</a>
+                  <span className="muted">
+                    {a.kind === "link" ? (media === "drive" ? "Google Drive" : "Link") : formatSize(a.size)} · {a.user_name} · {timeAgo(a.created_at)}
+                  </span>
                 </div>
-                {canDelete && <button className="x" title="Delete attachment" onClick={() => confirm(`Delete ${a.filename}?`) && start(() => deleteAttachment(a.id))}>×</button>}
+                {canDelete && <button className="x" title="Remove attachment" onClick={() => confirm(`Remove ${a.filename}?`) && start(() => deleteAttachment(a.id))}>×</button>}
               </div>
             );
           })}
         </div>
       )}
-      {preview && (
+      {preview && pm && (
         <div className="lightbox" onClick={() => setPreview(null)}>
           <button className="close" aria-label="Close">×</button>
-          {isImage(preview.mime)
-            ? /* eslint-disable-next-line @next/next/no-img-element */ <img src={`/api/files/${preview.id}`} alt={preview.filename} onClick={(e) => e.stopPropagation()} />
-            : <video src={`/api/files/${preview.id}`} controls autoPlay onClick={(e) => e.stopPropagation()} />}
+          {pm === "drive" && preview.drive_id ? (
+            <>
+              <iframe className="drive-frame" src={drivePreview(preview.drive_id)} allow="autoplay; fullscreen" allowFullScreen title={preview.filename} onClick={(e) => e.stopPropagation()} />
+              <a className="open-drive" href={preview.url!} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>Open in Drive ↗</a>
+            </>
+          ) : pm === "image" ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img src={srcOf(preview)} alt={preview.filename} onClick={(e) => e.stopPropagation()} />
+          ) : (
+            <video src={srcOf(preview)} controls autoPlay onClick={(e) => e.stopPropagation()} />
+          )}
         </div>
       )}
     </div>

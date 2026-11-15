@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { getCurrentUser } from "@/lib/auth";
-import { get, UPLOAD_DIR } from "@/lib/db";
+import { col, UPLOAD_DIR } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -11,7 +11,7 @@ const INLINE = /^(image\/(png|jpe?g|gif|webp|avif|bmp)|video\/|audio\/|applicati
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   if (!(await getCurrentUser())) return new Response("Unauthorized", { status: 401 });
   const { id } = await ctx.params;
-  const a = get<{ filename: string; stored_name: string; mime: string }>("SELECT filename,stored_name,mime FROM attachments WHERE id = ?", Number(id));
+  const a = await (await col("attachments")).findOne({ _id: Number(id) as never, kind: "file" }) as { filename: string; stored_name: string; mime: string } | null;
   if (!a) return new Response("Not found", { status: 404 });
   const file = path.join(UPLOAD_DIR, path.basename(a.stored_name));
   let size: number;

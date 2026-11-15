@@ -1,11 +1,11 @@
 "use client";
-import { useActionState } from "react";
+import { useFormAction } from "@/lib/use-form-action";
 import { login } from "@/lib/actions";
 
 export default function LoginForm() {
-  const [state, action, pending] = useActionState(login, undefined);
+  const { state, onSubmit, pending } = useFormAction(login);
   return (
-    <form action={action}>
+    <form onSubmit={onSubmit}>
       <label htmlFor="email">Email</label>
       <input id="email" name="email" type="email" required autoFocus autoComplete="username" />
       <label htmlFor="password">Password</label>

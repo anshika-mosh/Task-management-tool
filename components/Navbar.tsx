@@ -20,12 +20,13 @@ function Dropdown({ label, children, right }: { label: React.ReactNode; children
   return (
     <div className="menu" ref={ref}>
       <button className="menu-btn" onClick={() => setOpen(!open)}>{label}</button>
-      {open && <div className={"menu-pop" + (right ? " right" : "")} onClick={() => setOpen(false)}>{children}</div>}
+      {/* Close after choosing a link. Not for buttons: unmounting a form before the browser submits it would cancel the submit (e.g. Log out). */}
+      {open && <div className={"menu-pop" + (right ? " right" : "")} onClick={(e) => (e.target as HTMLElement).closest("a") && setOpen(false)}>{children}</div>}
     </div>
   );
 }
 
-export default function Navbar({ user, boards, users, sprints }: { user: User; boards: Board[]; users: User[]; sprints: SprintOpt[] }) {
+export default function Navbar({ user, boards, users, sprints, allowUploads }: { user: User; boards: Board[]; users: User[]; sprints: SprintOpt[]; allowUploads: boolean }) {
   const path = usePathname();
   const router = useRouter();
   const [creating, setCreating] = useState(false);
@@ -54,7 +55,7 @@ export default function Navbar({ user, boards, users, sprints }: { user: User; b
         <hr />
         <form action={logout}><button type="submit">Log out</button></form>
       </Dropdown>
-      {creating && <CreateTicket boards={boards} users={users} sprints={sprints} defaultBoardId={current?.id} onClose={() => setCreating(false)} />}
+      {creating && <CreateTicket boards={boards} users={users} sprints={sprints} allowUploads={allowUploads} defaultBoardId={current?.id} onClose={() => setCreating(false)} />}
     </header>
   );
 }

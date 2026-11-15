@@ -12,16 +12,16 @@ export default async function BoardPage({ params, searchParams }: { params: Prom
   const me = await requireUser();
   const { key } = await params;
   const { sprint: sprintParam } = await searchParams;
-  const board = getBoardByKey(key);
+  const board = await getBoardByKey(key);
   if (!board) notFound();
 
-  const sprints = getSprints(board.id);
+  const sprints = await getSprints(board.id);
   const active = sprints.find((s) => s.status === "active");
   // Default view: the active sprint (like Jira's board), otherwise everything.
   const view = sprintParam ?? (active ? String(active.id) : "all");
   const current = /^\d+$/.test(view) ? sprints.find((s) => s.id === Number(view)) : undefined;
-  const tickets = getTickets({ boardId: board.id, sprint: view === "all" ? undefined : current ? String(current.id) : view === "backlog" ? "backlog" : undefined });
-  const users = getUsers();
+  const tickets = await getTickets({ boardId: board.id, sprint: view === "all" ? undefined : current ? String(current.id) : view === "backlog" ? "backlog" : undefined });
+  const users = await getUsers();
   const done = tickets.filter((t) => t.status === "done").length;
   const daysLeft = current?.end_date ? Math.ceil((new Date(current.end_date + "T23:59:59").getTime() - Date.now()) / 86400000) : null;
 

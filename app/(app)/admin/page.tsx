@@ -5,8 +5,8 @@ import { BoardForms, UserForms, UserRow } from "./AdminClient";
 
 export default async function Admin() {
   const me = await requireAdmin();
-  const boards = getBoardStats();
-  const users = getUsers();
+  const boards = await getBoardStats();
+  const users = await getUsers();
   return (
     <div className="page">
       <div className="page-head"><div className="grow"><h1>Administration</h1><div className="muted">Decide board names and keys, and manage who has access.</div></div><Link className="btn" href="/admin/mail">✉ Mail outbox</Link></div>

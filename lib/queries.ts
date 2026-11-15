@@ -1,109 +1,211 @@
-import { all, get } from "./db";
+import { col, toRow, toRows, type Doc } from "./db";
 import type { Activity, Attachment, Board, BoardStats, Comment, EmailRow, Sprint, Ticket, User } from "./types";
 
-const TICKET_SELECT = `
-SELECT t.*, b.key AS board_key, b.name AS board_name, b.color AS board_color,
-  b.key || '-' || t.number AS key,
-  a.name AS assignee_name, a.color AS assignee_color,
-  r.name AS reporter_name, r.color AS reporter_color,
-  sp.name AS sprint_name, sp.status AS sprint_status,
-  (SELECT COUNT(*) FROM attachments x WHERE x.ticket_id = t.id) AS attach_count,
-  (SELECT COUNT(*) FROM comments c WHERE c.ticket_id = t.id AND c.kind = 'comment') AS comment_count,
-  (SELECT COALESCE(SUM(hours),0) FROM comments c WHERE c.ticket_id = t.id) AS hours
-FROM tickets t
-JOIN boards b ON b.id = t.board_id
-LEFT JOIN users a ON a.id = t.assignee_id
-LEFT JOIN users r ON r.id = t.reporter_id
-LEFT JOIN sprints sp ON sp.id = t.sprint_id`;
+const CI = { locale: "en", strength: 2 } as const; // case-insensitive ordering
+const NO_PASSWORD = { projection: { password_hash: 0 } } as const;
+const PRIORITY_RANK: Record<string, number> = { highest: 0, high: 1, medium: 2, low: 3, lowest: 4 };
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-export const getUsers = () =>
-  all<User>("SELECT id,name,email,role,color,created_at FROM users ORDER BY name COLLATE NOCASE");
+/* -------------------------------- lookups -------------------------------- */
 
-export const getBoards = () => all<Board>("SELECT * FROM boards ORDER BY name COLLATE NOCASE");
+async function byId<T>(name: "users" | "boards" | "sprints" | "tickets", ids: (number | null | undefined)[]): Promise<Map<number, T>> {
+  const unique = [...new Set(ids.filter((i): i is number => typeof i === "number"))];
+  if (unique.length === 0) return new Map();
+  const c = await col(name);
+  const docs = await c.find({ _id: { $in: unique as never[] } }, name === "users" ? NO_PASSWORD : undefined).toArray();
+  return new Map(docs.map((d) => [d._id as unknown as number, toRow<T>(d)!]));
+}
 
-export const getBoardByKey = (key: string) => get<Board>("SELECT * FROM boards WHERE key = ?", key.toUpperCase());
+export async function getUsers(): Promise<User[]> {
+  const c = await col("users");
+  return toRows<User>(await c.find({}, NO_PASSWORD).collation(CI).sort({ name: 1 }).toArray());
+}
 
-export const getBoardStats = () =>
-  all<BoardStats>(`
-SELECT b.*, COUNT(t.id) AS total,
-  COALESCE(SUM(t.status='todo'),0) AS todo,
-  COALESCE(SUM(t.status='in_progress'),0) AS in_progress,
-  COALESCE(SUM(t.status='in_review'),0) AS in_review,
-  COALESCE(SUM(t.status='done'),0) AS done,
-  COALESCE(AVG(t.progress),0) AS avg_progress
-FROM boards b LEFT JOIN tickets t ON t.board_id = b.id
-GROUP BY b.id ORDER BY b.name COLLATE NOCASE`);
+export async function getBoards(): Promise<Board[]> {
+  const c = await col("boards");
+  return toRows<Board>(await c.find({}).collation(CI).sort({ name: 1 }).toArray());
+}
+
+export async function getBoardByKey(key: string): Promise<Board | undefined> {
+  const c = await col("boards");
+  return toRow<Board>(await c.findOne({ key: key.toUpperCase() }));
+}
+
+export async function getBoardStats(): Promise<BoardStats[]> {
+  const boards = await getBoards();
+  const t = await col("tickets");
+  const agg = await t.aggregate([{ $group: { _id: { b: "$board_id", s: "$status" }, n: { $sum: 1 }, p: { $sum: "$progress" } } }]).toArray();
+  return boards.map((b) => {
+    const s = { total: 0, todo: 0, in_progress: 0, in_review: 0, done: 0 };
+    let progress = 0;
+    for (const g of agg) {
+      if (g._id.b !== b.id) continue;
+      s.total += g.n;
+      progress += g.p;
+      if (g._id.s in s) s[g._id.s as "todo" | "in_progress" | "in_review" | "done"] += g.n;
+    }
+    return { ...b, ...s, avg_progress: s.total ? progress / s.total : 0 };
+  });
+}
+
+/* --------------------------------- tickets -------------------------------- */
 
 export type TicketFilter = { boardId?: number; q?: string; assignee?: string; status?: string; type?: string; priority?: string; mine?: number; sprint?: string };
 
-export function getTickets(f: TicketFilter = {}): Ticket[] {
-  const where: string[] = [];
-  const p: (string | number)[] = [];
-  if (f.boardId) { where.push("t.board_id = ?"); p.push(f.boardId); }
-  if (f.status) { where.push("t.status = ?"); p.push(f.status); }
-  if (f.type) { where.push("t.type = ?"); p.push(f.type); }
-  if (f.priority) { where.push("t.priority = ?"); p.push(f.priority); }
-  if (f.assignee === "none") where.push("t.assignee_id IS NULL");
-  else if (f.assignee) { where.push("t.assignee_id = ?"); p.push(Number(f.assignee)); }
-  if (f.sprint === "backlog") where.push("t.sprint_id IS NULL");
-  else if (f.sprint) { where.push("t.sprint_id = ?"); p.push(Number(f.sprint)); }
-  if (f.mine) { where.push("t.assignee_id = ?"); p.push(f.mine); }
-  if (f.q) {
-    where.push("(t.title LIKE ? OR t.description LIKE ? OR (b.key || '-' || t.number) LIKE ?)");
-    const like = `%${f.q}%`;
-    p.push(like, like, like);
-  }
-  const sql = `${TICKET_SELECT} ${where.length ? "WHERE " + where.join(" AND ") : ""}
-    ORDER BY CASE t.priority WHEN 'highest' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, t.updated_at DESC`;
-  return all<Ticket>(sql, ...p);
+/** Adds board/assignee/reporter/sprint names and comment/attachment/time counts to raw ticket documents. */
+async function enrichTickets(docs: Doc[]): Promise<Ticket[]> {
+  if (docs.length === 0) return [];
+  const ids = docs.map((d) => d._id as number);
+  const [boards, users, sprints, comments, attachments] = await Promise.all([
+    byId<Board>("boards", docs.map((d) => d.board_id)),
+    byId<User>("users", docs.flatMap((d) => [d.assignee_id, d.reporter_id])),
+    byId<Sprint>("sprints", docs.map((d) => d.sprint_id)),
+    col("comments").then((c) => c.aggregate([
+      { $match: { ticket_id: { $in: ids } } },
+      { $group: { _id: "$ticket_id", comments: { $sum: { $cond: [{ $eq: ["$kind", "comment"] }, 1, 0] } }, hours: { $sum: { $ifNull: ["$hours", 0] } } } },
+    ]).toArray()),
+    col("attachments").then((c) => c.aggregate([{ $match: { ticket_id: { $in: ids } } }, { $group: { _id: "$ticket_id", n: { $sum: 1 } } }]).toArray()),
+  ]);
+  const cm = new Map(comments.map((c) => [c._id as number, c]));
+  const at = new Map(attachments.map((a) => [a._id as number, a.n as number]));
+  return docs.map((d) => {
+    const b = boards.get(d.board_id);
+    const a = users.get(d.assignee_id);
+    const r = users.get(d.reporter_id);
+    const s = sprints.get(d.sprint_id);
+    const stats = cm.get(d._id);
+    return {
+      ...(toRow<Ticket>(d) as Ticket),
+      key: `${b?.key ?? "?"}-${d.number}`,
+      board_key: b?.key ?? "?", board_name: b?.name ?? "", board_color: b?.color ?? "#2684ff",
+      assignee_id: d.assignee_id ?? null, assignee_name: a?.name ?? null, assignee_color: a?.color ?? null,
+      reporter_id: d.reporter_id ?? null, reporter_name: r?.name ?? null, reporter_color: r?.color ?? null,
+      sprint_id: d.sprint_id ?? null, sprint_name: s?.name ?? null, sprint_status: s?.status ?? null,
+      attach_count: at.get(d._id) ?? 0, comment_count: stats?.comments ?? 0, hours: stats?.hours ?? 0,
+    };
+  });
 }
 
-export function getTicketByKey(key: string): Ticket | undefined {
+export async function getTickets(f: TicketFilter = {}): Promise<Ticket[]> {
+  const and: Doc[] = [];
+  if (f.boardId) and.push({ board_id: f.boardId });
+  if (f.status) and.push({ status: f.status });
+  if (f.type) and.push({ type: f.type });
+  if (f.priority) and.push({ priority: f.priority });
+  if (f.assignee === "none") and.push({ assignee_id: null });
+  else if (f.assignee) and.push({ assignee_id: Number(f.assignee) });
+  if (f.mine) and.push({ assignee_id: f.mine });
+  if (f.sprint === "backlog") and.push({ sprint_id: null });
+  else if (f.sprint) and.push({ sprint_id: Number(f.sprint) });
+  if (f.q) {
+    const re = new RegExp(escapeRe(f.q), "i");
+    const or: Doc[] = [{ title: re }, { description: re }];
+    // Partial ticket key, e.g. "WEB-3" or "web-"
+    const km = /^([A-Za-z0-9]+)-(\d*)$/.exec(f.q.trim());
+    if (km) {
+      const boards = await (await col("boards")).find({ key: new RegExp("^" + escapeRe(km[1]), "i") }).toArray();
+      for (const b of boards) or.push(km[2] ? { board_id: b._id, number: Number(km[2]) } : { board_id: b._id });
+    }
+    and.push({ $or: or });
+  }
+  const c = await col("tickets");
+  const docs = await c.find(and.length ? { $and: and } : {}).toArray();
+  const rows = await enrichTickets(docs);
+  return rows.sort((a, b) => (PRIORITY_RANK[a.priority] ?? 5) - (PRIORITY_RANK[b.priority] ?? 5) || b.updated_at.localeCompare(a.updated_at));
+}
+
+export async function getTicketByKey(key: string): Promise<Ticket | undefined> {
   const m = /^([A-Za-z0-9]+)-(\d+)$/.exec(key);
   if (!m) return undefined;
-  return get<Ticket>(`${TICKET_SELECT} WHERE b.key = ? AND t.number = ?`, m[1].toUpperCase(), Number(m[2]));
+  const board = await (await col("boards")).findOne({ key: m[1].toUpperCase() });
+  if (!board) return undefined;
+  const doc = await (await col("tickets")).findOne({ board_id: board._id, number: Number(m[2]) });
+  return doc ? (await enrichTickets([doc]))[0] : undefined;
 }
 
-export const getTicketById = (id: number) => get<Ticket>(`${TICKET_SELECT} WHERE t.id = ?`, id);
+export async function getTicketById(id: number): Promise<Ticket | undefined> {
+  const doc = await (await col("tickets")).findOne({ _id: id as never });
+  return doc ? (await enrichTickets([doc]))[0] : undefined;
+}
 
-export const getComments = (ticketId: number) =>
-  all<Comment>(
-    `SELECT c.*, u.name AS user_name, u.color AS user_color FROM comments c JOIN users u ON u.id = c.user_id
-     WHERE c.ticket_id = ? ORDER BY c.created_at DESC, c.id DESC`,
-    ticketId,
-  );
+/* ------------------------- comments, files, activity ------------------------ */
 
-export const getAttachments = (ticketId: number) =>
-  all<Attachment>(
-    `SELECT a.id,a.ticket_id,a.user_id,a.filename,a.mime,a.size,a.created_at, u.name AS user_name
-     FROM attachments a JOIN users u ON u.id = a.user_id WHERE a.ticket_id = ? ORDER BY a.id DESC`,
-    ticketId,
-  );
+export async function getComments(ticketId: number): Promise<Comment[]> {
+  const docs = await (await col("comments")).find({ ticket_id: ticketId }).sort({ created_at: -1, _id: -1 }).toArray();
+  const users = await byId<User>("users", docs.map((d) => d.user_id));
+  return docs.map((d) => ({
+    ...(toRow<Comment>(d) as Comment),
+    progress: d.progress ?? null, hours: d.hours ?? null,
+    user_name: users.get(d.user_id)?.name ?? "Deleted user", user_color: users.get(d.user_id)?.color ?? "#6b778c",
+  }));
+}
 
-const ACT_SELECT = `SELECT a.*, u.name AS user_name, u.color AS user_color, b.key || '-' || t.number AS ticket_key, t.title AS ticket_title
-  FROM activity a JOIN users u ON u.id = a.user_id JOIN tickets t ON t.id = a.ticket_id JOIN boards b ON b.id = t.board_id`;
+export async function getAttachments(ticketId: number): Promise<Attachment[]> {
+  const docs = await (await col("attachments")).find({ ticket_id: ticketId }).sort({ _id: -1 }).toArray();
+  const users = await byId<User>("users", docs.map((d) => d.user_id));
+  return docs.map((d) => ({
+    id: d._id, ticket_id: d.ticket_id, user_id: d.user_id, user_name: users.get(d.user_id)?.name ?? "Deleted user",
+    filename: d.filename, mime: d.mime ?? "", size: d.size ?? 0, created_at: d.created_at,
+    kind: d.kind ?? "file", link_type: d.link_type ?? null, url: d.url ?? null, drive_id: d.drive_id ?? null,
+  }));
+}
 
-export const getTicketActivity = (ticketId: number) =>
-  all<Activity>(`${ACT_SELECT} WHERE a.ticket_id = ? ORDER BY a.id DESC`, ticketId);
+async function withActors(docs: Doc[], withTicket: boolean): Promise<Activity[]> {
+  const users = await byId<User>("users", docs.map((d) => d.user_id));
+  const tickets = withTicket ? await byId<{ id: number; board_id: number; number: number; title: string }>("tickets", docs.map((d) => d.ticket_id)) : new Map();
+  const boards = withTicket ? await byId<Board>("boards", [...tickets.values()].map((t) => t.board_id)) : new Map();
+  return docs.map((d) => {
+    const t = tickets.get(d.ticket_id);
+    return {
+      ...(toRow<Activity>(d) as Activity),
+      user_name: users.get(d.user_id)?.name ?? "Deleted user", user_color: users.get(d.user_id)?.color ?? "#6b778c",
+      ...(t ? { ticket_key: `${boards.get(t.board_id)?.key ?? "?"}-${t.number}`, ticket_title: t.title } : {}),
+    };
+  });
+}
 
-export const getRecentActivity = (limit = 12) =>
-  all<Activity>(`${ACT_SELECT} ORDER BY a.id DESC LIMIT ?`, limit);
+export async function getTicketActivity(ticketId: number): Promise<Activity[]> {
+  return withActors(await (await col("activity")).find({ ticket_id: ticketId }).sort({ _id: -1 }).toArray(), false);
+}
 
-export const getBoardActivity = (boardId: number, limit = 8) =>
-  all<Activity>(`${ACT_SELECT} WHERE t.board_id = ? ORDER BY a.id DESC LIMIT ?`, boardId, limit);
+export async function getRecentActivity(limit = 12): Promise<Activity[]> {
+  return withActors(await (await col("activity")).find({}).sort({ _id: -1 }).limit(limit).toArray(), true);
+}
 
-const SPRINT_SELECT = `SELECT s.*, COUNT(t.id) AS total, COALESCE(SUM(t.status='done'),0) AS done
-  FROM sprints s LEFT JOIN tickets t ON t.sprint_id = s.id`;
+/* --------------------------------- sprints -------------------------------- */
 
-export const getSprints = (boardId: number) =>
-  all<Sprint>(`${SPRINT_SELECT} WHERE s.board_id = ? GROUP BY s.id
-    ORDER BY CASE s.status WHEN 'active' THEN 0 WHEN 'planned' THEN 1 ELSE 2 END, s.start_date, s.id DESC`, boardId);
+async function withSprintCounts(docs: Doc[]): Promise<Sprint[]> {
+  if (docs.length === 0) return [];
+  const agg = await (await col("tickets")).aggregate([
+    { $match: { sprint_id: { $in: docs.map((d) => d._id) } } },
+    { $group: { _id: "$sprint_id", total: { $sum: 1 }, done: { $sum: { $cond: [{ $eq: ["$status", "done"] }, 1, 0] } } } },
+  ]).toArray();
+  const m = new Map(agg.map((a) => [a._id as number, a]));
+  return docs.map((d) => ({
+    ...(toRow<Sprint>(d) as Sprint),
+    start_date: d.start_date ?? null, end_date: d.end_date ?? null, completed_at: d.completed_at ?? null,
+    total: m.get(d._id)?.total ?? 0, done: m.get(d._id)?.done ?? 0,
+  }));
+}
 
-export const getSprint = (id: number) => get<Sprint>(`${SPRINT_SELECT} WHERE s.id = ? GROUP BY s.id`, id);
+const SPRINT_RANK: Record<string, number> = { active: 0, planned: 1, completed: 2 };
+
+export async function getSprints(boardId: number): Promise<Sprint[]> {
+  const rows = await withSprintCounts(await (await col("sprints")).find({ board_id: boardId }).toArray());
+  return rows.sort((a, b) => SPRINT_RANK[a.status] - SPRINT_RANK[b.status] || (a.start_date ?? "9999").localeCompare(b.start_date ?? "9999") || b.id - a.id);
+}
+
+export async function getSprint(id: number): Promise<Sprint | undefined> {
+  const doc = await (await col("sprints")).findOne({ _id: id as never });
+  return doc ? (await withSprintCounts([doc]))[0] : undefined;
+}
 
 /** Sprints that can still receive tickets (not completed), across all boards. */
-export const getOpenSprints = () =>
-  all<Sprint>(`${SPRINT_SELECT} WHERE s.status != 'completed' GROUP BY s.id ORDER BY s.start_date, s.id`);
+export async function getOpenSprints(): Promise<Sprint[]> {
+  const rows = await withSprintCounts(await (await col("sprints")).find({ status: { $ne: "completed" } }).toArray());
+  return rows.sort((a, b) => (a.start_date ?? "9999").localeCompare(b.start_date ?? "9999") || a.id - b.id);
+}
 
-export const getEmails = (limit = 100) =>
-  all<EmailRow>("SELECT * FROM emails ORDER BY id DESC LIMIT ?", limit);
+export async function getEmails(limit = 100): Promise<EmailRow[]> {
+  return toRows<EmailRow>(await (await col("emails")).find({}).sort({ _id: -1 }).limit(limit).toArray());
+}

@@ -10,10 +10,13 @@ import { uploadFiles } from "./uploader";
 
 export type SprintOpt = { id: number; board_id: number; name: string; status: string };
 
-export default function CreateTicket({ boards, users, sprints, defaultBoardId, onClose }: { boards: Board[]; users: User[]; sprints: SprintOpt[]; defaultBoardId?: number; onClose: () => void }) {
+export default function CreateTicket({ boards, users, sprints, defaultBoardId, allowUploads, onClose }: { boards: Board[]; users: User[]; sprints: SprintOpt[]; defaultBoardId?: number; allowUploads: boolean; onClose: () => void }) {
   const router = useRouter();
   const [boardId, setBoardId] = useState(defaultBoardId ?? boards[0]?.id);
   const [files, setFiles] = useState<File[]>([]);
+  const [links, setLinks] = useState<{ url: string; name: string }[]>([]);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkName, setLinkName] = useState("");
   const [error, setError] = useState("");
   const [busy, startTransition] = useTransition();
   const [pct, setPct] = useState<number | null>(null);
@@ -21,6 +24,17 @@ export default function CreateTicket({ boards, users, sprints, defaultBoardId, o
   const board = boards.find((b) => b.id === boardId);
   const boardSprints = sprints.filter((s) => s.board_id === boardId);
   const activeSprint = boardSprints.find((s) => s.status === "active");
+
+  // Include a link that was typed but not yet added with the button.
+  function pendingLinks() {
+    return linkUrl.trim() ? [...links, { url: linkUrl.trim(), name: linkName.trim() }] : links;
+  }
+
+  function addLink() {
+    if (!linkUrl.trim()) return;
+    setLinks([...links, { url: linkUrl.trim(), name: linkName.trim() }]);
+    setLinkUrl(""); setLinkName("");
+  }
 
   function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -36,6 +50,7 @@ export default function CreateTicket({ boards, users, sprints, defaultBoardId, o
         assigneeId: fd.get("assignee") ? Number(fd.get("assignee")) : null,
         dueDate: String(fd.get("due") ?? "") || null,
         sprintId: fd.get("sprint") ? Number(fd.get("sprint")) : null,
+        links: pendingLinks(),
       });
       if (res.error || !res.key) return setError(res.error ?? "Could not create ticket");
       if (files.length) {
@@ -93,13 +108,26 @@ export default function CreateTicket({ boards, users, sprints, defaultBoardId, o
           </div>
           <div><label>Due date</label><input type="date" name="due" /></div>
         </div>
-        <label>Attachments (images, videos, files)</label>
-        <input ref={fileRef} type="file" multiple hidden onChange={(e) => setFiles([...files, ...Array.from(e.target.files ?? [])])} />
-        <button type="button" className="btn" onClick={() => fileRef.current?.click()}>📎 Add files</button>
-        {files.map((f, i) => (
-          <div key={i} className="upload-row"><span className="grow">{f.name} <span className="muted">({formatSize(f.size)})</span></span>
-            <button type="button" className="btn sm ghost" onClick={() => setFiles(files.filter((_, j) => j !== i))}>Remove</button></div>
+        <label>Images &amp; videos (Google Drive links)</label>
+        <div className="link-form">
+          <input type="url" value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="Paste a Drive / image / video link" aria-label="Link URL" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addLink(); } }} />
+          <input value={linkName} onChange={(e) => setLinkName(e.target.value)} placeholder="Name (optional)" aria-label="Link name" />
+          <button type="button" className="btn" onClick={addLink}>Add</button>
+        </div>
+        {links.map((l, i) => (
+          <div key={i} className="upload-row"><span className="grow">🔗 {l.name || l.url}</span>
+            <button type="button" className="btn sm ghost" onClick={() => setLinks(links.filter((_, j) => j !== i))}>Remove</button></div>
         ))}
+        {allowUploads && (
+          <>
+            <input ref={fileRef} type="file" multiple hidden onChange={(e) => setFiles([...files, ...Array.from(e.target.files ?? [])])} />
+            <button type="button" className="btn" style={{ marginTop: 8 }} onClick={() => fileRef.current?.click()}>📎 Add files</button>
+            {files.map((f, i) => (
+              <div key={i} className="upload-row"><span className="grow">{f.name} <span className="muted">({formatSize(f.size)})</span></span>
+                <button type="button" className="btn sm ghost" onClick={() => setFiles(files.filter((_, j) => j !== i))}>Remove</button></div>
+            ))}
+          </>
+        )}
         {pct !== null && <div className="upload-row"><div className="progress"><div style={{ width: `${pct}%` }} /></div>{pct}%</div>}
         {error && <p className="err">{error}</p>}
         <div className="modal-foot">
